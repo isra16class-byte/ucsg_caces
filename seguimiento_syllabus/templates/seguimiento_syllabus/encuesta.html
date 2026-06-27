@@ -247,21 +247,24 @@
   }
 
   function dibujarRadar(ef1, ef2, ef3, ef4, ef5) {
-    const cx = 100, cy = 85, r = 70;
+    const cx = 100, cy = 85, r = 63;
     const angles = [-90, -18, 54, 126, 198];
     const vals = [ef1, ef2, ef3, ef4, ef5];
     const points = vals.map((v, i) => {
       const angle = angles[i] * Math.PI / 180;
-      return `${cx + r * v * Math.cos(angle)},${cy + r * v * Math.sin(angle)}`;
+      const x = cx + r * Math.max(0, Math.min(1, v)) * Math.cos(angle);
+      const y = cy + r * Math.max(0, Math.min(1, v)) * Math.sin(angle);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
     }).join(' ');
     const polygon = document.getElementById('radar-polygon');
     const circles = document.querySelectorAll('.radar-dot');
     if(polygon) polygon.setAttribute('points', points);
     vals.forEach((v, i) => {
       const angle = angles[i] * Math.PI / 180;
+      const vClamped = Math.max(0, Math.min(1, v));
       if(circles[i]) {
-        circles[i].setAttribute('cx', cx + r * v * Math.cos(angle));
-        circles[i].setAttribute('cy', cy + r * v * Math.sin(angle));
+        circles[i].setAttribute('cx', cx + r * vClamped * Math.cos(angle));
+        circles[i].setAttribute('cy', cy + r * vClamped * Math.sin(angle));
       }
     });
   }
