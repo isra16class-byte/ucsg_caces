@@ -1,0 +1,51 @@
+{% extends 'seguimiento_syllabus/base.html' %}
+
+{% block content %}
+<div class="card">
+    <h3 style="margin-bottom: 8px;">Resultados de la Heteroevaluación</h3>
+    <p style="font-size: 13px; color: #888; margin-bottom: 24px;">Calculado automáticamente desde Google Forms</p>
+
+    <div style="display: flex; align-items: center; gap: 40px; margin-bottom: 32px;">
+        <div style="position: relative; width: 160px; height: 160px;">
+            <svg width="160" height="160" viewBox="0 0 160 160">
+                <circle cx="80" cy="80" r="70" fill="none" stroke="#e0e0e0" stroke-width="14"/>
+                <circle cx="80" cy="80" r="70" fill="none" stroke="#3b3f8c" stroke-width="14"
+                    stroke-dasharray="{{ promedio_general }} 100"
+                    transform="rotate(-90 80 80)"
+                    style="stroke-dasharray: calc({{ promedio_general }} * 4.4) 440;"/>
+            </svg>
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center;">
+                <div style="font-size: 26px; font-weight: 700;">{{ promedio_general }}%</div>
+            </div>
+        </div>
+        <div>
+            <p style="font-size: 13px; color: #888;">Resultado general</p>
+            <p style="font-size: 22px; font-weight: 700; color: #3b3f8c;">{{ escala }}</p>
+        </div>
+    </div>
+
+    <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+        <thead>
+            <tr style="background: #f4f5f7;">
+                <th style="padding: 10px 16px; text-align: left; color: #888;">Pregunta</th>
+                <th style="padding: 10px 16px; text-align: center; color: #888;">Promedio</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for pregunta, promedio in promedios.items %}
+            <tr style="border-top: 1px solid #eee;">
+                <td style="padding: 10px 16px;">{{ pregunta }}</td>
+                <td style="padding: 10px 16px; text-align: center;">
+                    <span style="
+                        padding: 4px 12px;
+                        border-radius: 20px;
+                        font-weight: 600;
+                        background: {% if promedio >= 75 %}#e8f5e9; color: #4caf50;{% elif promedio >= 50 %}#fff8e1; color: #ffc107;{% elif promedio >= 25 %}#fff3e0; color: #ff9800;{% else %}#ffebee; color: #f44336;{% endif %}
+                    ">{{ promedio }}%</span>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

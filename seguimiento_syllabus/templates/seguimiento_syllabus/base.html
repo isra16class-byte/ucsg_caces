@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CACES · UAFTT</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f5f7; color: #333; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+        .header { background: white; padding: 10px 24px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e0e0e0; flex-shrink: 0; }
+        .header-left { display: flex; align-items: center; gap: 10px; }
+        .breadcrumb { font-size: 13px; color: #888; display: flex; align-items: center; gap: 6px; }
+        .breadcrumb a { color: #3b3f8c; text-decoration: none; }
+        .header-title { font-size: 15px; font-weight: 700; color: #0F1E3C; }
+        .header-salir { font-size: 13px; color: #888; cursor: pointer; }
+
+        .tabs { display: flex; gap: 0; padding: 0 24px; border-bottom: 1px solid #e0e0e0; background: white; flex-shrink: 0; }
+        .tab { padding: 10px 16px; font-size: 13px; cursor: pointer; text-decoration: none; color: #666; border-bottom: 2px solid transparent; }
+        .tab.active { color: #3b3f8c; border-bottom: 2px solid #3b3f8c; font-weight: 600; }
+
+        .content { padding: 16px 24px; flex: 1; overflow: auto; }
+        .card { background: white; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <div class="breadcrumb">
+                <a href="/">← Docencia</a>
+                <span>|</span>
+                <span style="color: #555;">I2</span>
+                <span class="header-title">Seguimiento de Syllabus</span>
+            </div>
+        </div>
+        <div class="header-salir">⬅ Salir</div>
+    </div>
+
+    <div class="tabs">
+        <a href="/" class="tab {% block tab_resultado %}{% endblock %}">📊 Resultado</a>
+        <a href="/cohortes/" class="tab {% block tab_cohortes %}{% endblock %}">⊞ Cohortes</a>
+        <a href="/evidencias/" class="tab {% block tab_evidencias %}{% endblock %}">📋 Evidencias</a>
+        <a href="/encuesta/" class="tab {% block tab_encuesta %}{% endblock %}">📋 Heteroevaluación</a>
+        <a href="/ficha-tecnica/" class="tab {% block tab_ficha %}{% endblock %}">📄 Ficha técnica</a>
+    </div>
+
+    <div class="content">
+        {% block content %}{% endblock %}
+    </div>
+</body>
+</html>
