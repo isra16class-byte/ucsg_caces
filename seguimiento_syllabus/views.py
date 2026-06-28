@@ -7,20 +7,11 @@ import re
 
 
 def _buscar_columna(preguntas, numero):
-    """
-    Busca columnas del CSV de Google Forms por número de pregunta.
-    Maneja [P5] y [P5. texto...] porque Google Forms incluye el texto de la pregunta.
-    """
     patron = re.compile(rf'\[P{numero}[\.\]]', re.IGNORECASE)
     return [p for p in preguntas if patron.search(p)]
 
 
 def _calcular_ef_desde_csv():
-    """
-    Lee el CSV de Google Sheets y devuelve los valores de EF1, EF3, EF4
-    como decimales 0-1, más el puntaje ponderado total.
-    Retorna None si no se puede conectar.
-    """
     URL_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSS9YX0N26YnO5pUAYc2U7JchenIAEasrpq0gs79Up0fOLrayn6JX-FmuolcXSkIL0MReJ7j0jpXPtC/pub?output=csv"
     puntaje_map = {"Siempre": 5, "Casi siempre": 4, "Algunas veces": 3, "Pocas veces": 2, "Nunca": 1}
 
@@ -68,8 +59,8 @@ def _calcular_ef_desde_csv():
     ef1 = promedio_ef_decimal(ef1_pregs)
     ef3 = promedio_ef_decimal(ef3_pregs)
     ef4 = promedio_ef_decimal(ef4_pregs)
-    ef2 = 0.72  # fijo hasta conectar con actas
-    ef5 = 0.68  # fijo hasta conectar con normativa
+    ef2 = 0.0
+    ef5 = 0.0
 
     ef_puntaje = round(ef1*0.33 + ef2*0.27 + ef3*0.20 + ef4*0.13 + ef5*0.07, 2)
 
@@ -86,11 +77,10 @@ def resultado(request):
     cohorte_id = request.GET.get('cohorte')
     cohorte_actual = None
 
-    # Datos de evidencias
     evidencias_info = {
-        'malla':    {'subida': False, 'label': 'Malla Curricular',          'ef': 'EF2'},
-        'syllabus': {'subida': False, 'label': 'Syllabus',                  'ef': 'EF2'},
-        'acta':     {'subida': False, 'label': 'Acta de Retroalimentación', 'ef': 'EF2'},
+        'malla':    {'subida': False, 'label': 'Malla Curricular'},
+        'syllabus': {'subida': False, 'label': 'Syllabus'},
+        'acta':     {'subida': False, 'label': 'Acta de Retroalimentación'},
     }
     total_evidencias = 0
 
@@ -104,7 +94,6 @@ def resultado(request):
 
     pct_evidencias = round(total_evidencias / 3 * 100, 1) if total_evidencias > 0 else 0
 
-    # Datos de heteroevaluación (desde Google Sheets)
     datos_ef = _calcular_ef_desde_csv()
     ef_disponible = datos_ef is not None
 
@@ -122,9 +111,6 @@ def resultado(request):
         respuestas = 0
         promedio_general = 0
 
-    # Resultado combinado:
-    # Si hay datos de EF → usar ef_puntaje × 100 como resultado principal
-    # Si no hay datos de EF → usar solo porcentaje de evidencias
     if ef_disponible and ef_puntaje > 0:
         resultado_final = round(ef_puntaje * 100, 1)
         fuente_resultado = 'combinado'
@@ -145,19 +131,20 @@ def resultado(request):
         escala = 'Deficiente'
         color_escala = '#EF4444'
 
+    # dash: valor precalculado para stroke-dasharray del SVG (perímetro = 2*π*54 ≈ 339.3)
+    dash = round(resultado_final * 3.393, 1)
+
     return render(request, 'seguimiento_syllabus/resultado.html', {
         'cohortes': cohortes,
         'cohorte_actual': cohorte_actual,
-        # Resultado principal
         'resultado_final': resultado_final,
         'escala': escala,
         'color_escala': color_escala,
         'fuente_resultado': fuente_resultado,
-        # Evidencias
+        'dash': dash,
         'evidencias_info': evidencias_info,
         'total_evidencias': total_evidencias,
         'pct_evidencias': pct_evidencias,
-        # EFs
         'ef_disponible': ef_disponible,
         'ef1': round(ef1 * 100, 1),
         'ef2': round(ef2 * 100, 1),
@@ -272,8 +259,8 @@ def calcular_resultados_encuesta(request):
     ef1 = promedio_ef_decimal(ef1_pregs)
     ef3 = promedio_ef_decimal(ef3_pregs)
     ef4 = promedio_ef_decimal(ef4_pregs)
-    ef2 = 0.00
-    ef5 = 0.00
+    ef2 = 0.0
+    ef5 = 0.0
 
     ef_puntaje = round(ef1*0.33 + ef2*0.27 + ef3*0.20 + ef4*0.13 + ef5*0.07, 2)
 

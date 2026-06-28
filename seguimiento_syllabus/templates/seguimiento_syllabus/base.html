@@ -36,16 +36,48 @@
         <div class="header-salir">⬅ Salir</div>
     </div>
 
-    <div class="tabs">
-        <a href="/" class="tab {% block tab_resultado %}{% endblock %}">📊 Resultado</a>
-        <a href="/cohortes/" class="tab {% block tab_cohortes %}{% endblock %}">⊞ Cohortes</a>
-        <a href="/evidencias/" class="tab {% block tab_evidencias %}{% endblock %}">📋 Evidencias</a>
-        <a href="/encuesta/" class="tab {% block tab_encuesta %}{% endblock %}">📋 Heteroevaluación</a>
-        <a href="/ficha-tecnica/" class="tab {% block tab_ficha %}{% endblock %}">📄 Ficha técnica</a>
+    <div class="tabs" id="main-tabs">
+        <a href="/" class="tab {% block tab_resultado %}{% endblock %}" data-base="/">📊 Resultado</a>
+        <a href="/cohortes/" class="tab {% block tab_cohortes %}{% endblock %}" data-base="/cohortes/">⊞ Cohortes</a>
+        <a href="/evidencias/" class="tab {% block tab_evidencias %}{% endblock %}" data-base="/evidencias/">📋 Evidencias</a>
+        <a href="/encuesta/" class="tab {% block tab_encuesta %}{% endblock %}" data-base="/encuesta/">📋 Heteroevaluación</a>
+        <a href="/ficha-tecnica/" class="tab {% block tab_ficha %}{% endblock %}" data-base="/ficha-tecnica/">📄 Ficha técnica</a>
     </div>
 
     <div class="content">
         {% block content %}{% endblock %}
     </div>
+
+<script>
+(function () {
+    const STORAGE_KEY = 'caces_cohorte_id';
+
+    // 1. Leer cohorte de la URL actual y guardarla
+    const params = new URLSearchParams(window.location.search);
+    const cohorteEnUrl = params.get('cohorte');
+    if (cohorteEnUrl) {
+        localStorage.setItem(STORAGE_KEY, cohorteEnUrl);
+    }
+
+    // 2. Al hacer clic en cualquier tab, agregar ?cohorte= si hay una guardada
+    const tabs = document.querySelectorAll('#main-tabs .tab');
+    tabs.forEach(function (tab) {
+        tab.addEventListener('click', function (e) {
+            const cohorteId = localStorage.getItem(STORAGE_KEY);
+            const base = tab.getAttribute('data-base');
+            // Solo agregar cohorte a tabs que la soporten (no a cohortes ni ficha-tecnica)
+            const soportaCohorte = ['/','/ evidencias/', '/encuesta/'].some(function(p){
+                return base === p || base === p.trim();
+            });
+            const tabsSinCohorte = ['/cohortes/', '/ficha-tecnica/'];
+            if (cohorteId && !tabsSinCohorte.includes(base)) {
+                e.preventDefault();
+                window.location.href = base + '?cohorte=' + cohorteId;
+            }
+        });
+    });
+})();
+</script>
+
 </body>
 </html>

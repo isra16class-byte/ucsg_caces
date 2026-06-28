@@ -10,13 +10,11 @@
   .card2 { background: white; border-radius: 16px; padding: 20px; border: 1px solid rgba(27,58,107,0.08); box-shadow: 0 1px 6px rgba(0,0,0,0.04); margin-bottom: 16px; }
   .section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #9CA3AF; margin-bottom: 12px; }
 
-  /* Gráfico circular */
   .donut-wrap { display: flex; align-items: center; gap: 32px; margin-bottom: 8px; }
   .donut-info .escala-val { font-size: 22px; font-weight: 700; font-family: 'Libre Baskerville', serif; }
   .donut-info .escala-label { font-size: 12px; color: #9CA3AF; margin-top: 2px; }
   .fuente-tag { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #9CA3AF; margin-top: 8px; }
 
-  /* Evidencias */
   .ev-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 0.5px solid #F0F0F0; }
   .ev-row:last-child { border-bottom: none; }
   .ev-label { font-size: 13px; color: #374151; }
@@ -26,7 +24,6 @@
   .prog-bar-bg { width: 100%; height: 6px; background: #F3F4F6; border-radius: 99px; margin-top: 10px; }
   .prog-bar { height: 6px; border-radius: 99px; background: #1B3A6B; transition: width 0.6s ease; }
 
-  /* EFs sidebar */
   .ef-item { margin-bottom: 12px; }
   .ef-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
   .ef-code { font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 3px; background: #EEF2F7; color: #1B3A6B; }
@@ -35,11 +32,9 @@
   .ef-bar { height: 4px; border-radius: 99px; }
   .ef-desc { font-size: 11px; color: #9CA3AF; margin-top: 3px; }
 
-  /* Selector */
   .selector-wrap { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
   .selector-wrap select { padding: 7px 12px; border-radius: 8px; border: 0.5px solid rgba(27,58,107,0.15); font-size: 13px; color: #374151; background: white; cursor: pointer; }
 
-  /* Escala */
   .escala-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; }
   .escala-item { border-radius: 10px; padding: 12px; text-align: center; }
   .escala-item p:first-child { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
@@ -48,7 +43,6 @@
   .no-data { color: #CBD5E1; font-size: 14px; text-align: center; padding: 24px 0; }
 </style>
 
-<!-- Selector de cohorte -->
 <div class="selector-wrap">
   <span style="font-size:13px; color:#9CA3AF; font-weight:600;">Período:</span>
   <form method="get">
@@ -64,22 +58,18 @@
 {% if cohorte_actual %}
 <div class="res-wrap">
 
-  <!-- MAIN -->
   <div class="res-main">
 
-    <!-- Resultado principal -->
     <div class="card2">
       <p class="section-label">Resultado del indicador 11.2</p>
       <div class="donut-wrap">
-        <!-- Gráfico circular SVG -->
         <svg width="130" height="130" viewBox="0 0 130 130">
           <circle cx="65" cy="65" r="54" fill="none" stroke="#F3F4F6" stroke-width="12"/>
           <circle cx="65" cy="65" r="54" fill="none"
             stroke="{{ color_escala }}"
             stroke-width="12"
             stroke-linecap="round"
-            stroke-dasharray="{{ resultado_final }} 100"
-            style="stroke-dasharray: calc({{ resultado_final }} * 3.393) 339.3;"
+            stroke-dasharray="{{ dash }} 339.3"
             transform="rotate(-90 65 65)"/>
           <text x="65" y="60" text-anchor="middle" font-size="20" font-weight="700" fill="#0F1E3C" font-family="DM Mono, monospace">{{ resultado_final }}%</text>
           <text x="65" y="76" text-anchor="middle" font-size="10" fill="#9CA3AF">Resultado</text>
@@ -102,11 +92,10 @@
       </div>
     </div>
 
-    <!-- Evidencias -->
     <div class="card2">
       <p class="section-label">Documentación subida — {{ total_evidencias }}/3</p>
       <div class="prog-bar-bg">
-        <div class="prog-bar" style="width:{{ pct_evidencias }}%;"></div>
+        <div class="prog-bar" style="width:{{ pct_evidencias }};"></div>
       </div>
       <div style="margin-top:14px;">
         {% for tipo, info in evidencias_info.items %}
@@ -120,7 +109,6 @@
       </div>
     </div>
 
-    <!-- Escala de valoración -->
     <div class="card2">
       <p class="section-label">Escala de valoración</p>
       <div class="escala-grid">
@@ -145,14 +133,12 @@
 
   </div>
 
-  <!-- SIDEBAR -->
   <div class="res-sidebar">
     <div class="card2">
       <p class="section-label">Desglose por EF</p>
 
       {% if ef_disponible %}
 
-      <!-- EF1 -->
       <div class="ef-item">
         <div class="ef-head">
           <span class="ef-code">EF1</span>
@@ -161,7 +147,7 @@
         <div class="ef-bar-bg"><div class="ef-bar" style="width:{{ ef1 }}%;background:{% if ef1 >= 75 %}#15803D{% elif ef1 >= 50 %}#CA8A04{% else %}#EF4444{% endif %};"></div></div>
         <div class="ef-desc">Seguimiento contenidos ×0.33</div>
       </div>
-      <!-- EF2 -->
+
       <div class="ef-item">
         <div class="ef-head">
           <span class="ef-code">EF2</span>
@@ -170,7 +156,7 @@
         <div class="ef-bar-bg"><div class="ef-bar" style="width:{{ ef2 }}%;background:{% if ef2 >= 75 %}#15803D{% elif ef2 >= 50 %}#CA8A04{% else %}#EF4444{% endif %};"></div></div>
         <div class="ef-desc">Mejora micro currículo ×0.27</div>
       </div>
-      <!-- EF3 -->
+
       <div class="ef-item">
         <div class="ef-head">
           <span class="ef-code">EF3</span>
@@ -179,7 +165,7 @@
         <div class="ef-bar-bg"><div class="ef-bar" style="width:{{ ef3 }}%;background:{% if ef3 >= 75 %}#15803D{% elif ef3 >= 50 %}#CA8A04{% else %}#EF4444{% endif %};"></div></div>
         <div class="ef-desc">Proceso difundido ×0.20</div>
       </div>
-      <!-- EF4 -->
+
       <div class="ef-item">
         <div class="ef-head">
           <span class="ef-code">EF4</span>
@@ -188,7 +174,7 @@
         <div class="ef-bar-bg"><div class="ef-bar" style="width:{{ ef4 }}%;background:{% if ef4 >= 75 %}#15803D{% elif ef4 >= 50 %}#CA8A04{% else %}#EF4444{% endif %};"></div></div>
         <div class="ef-desc">Difusión syllabus EVA ×0.13</div>
       </div>
-      <!-- EF5 -->
+
       <div class="ef-item">
         <div class="ef-head">
           <span class="ef-code">EF5</span>
@@ -197,6 +183,7 @@
         <div class="ef-bar-bg"><div class="ef-bar" style="width:{{ ef5 }}%;background:{% if ef5 >= 75 %}#15803D{% elif ef5 >= 50 %}#CA8A04{% else %}#EF4444{% endif %};"></div></div>
         <div class="ef-desc">Normativa institucional ×0.07</div>
       </div>
+
       <div style="border-top:0.5px solid #F0F0F0; margin-top:12px; padding-top:12px;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <span style="font-size:12px; font-weight:600; color:#1B3A6B;">Puntaje total</span>
@@ -218,7 +205,6 @@
 </div>
 
 {% else %}
-<!-- Estado vacío -->
 <div class="card2" style="text-align:center; padding:48px 20px;">
   <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#D1D5DB" stroke-width="1.5" style="margin:0 auto 12px;display:block;"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
   <p style="font-size:14px; color:#9CA3AF;">Selecciona una cohorte para ver el resultado del indicador.</p>
