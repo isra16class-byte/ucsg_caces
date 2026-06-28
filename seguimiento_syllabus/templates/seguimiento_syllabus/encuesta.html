@@ -62,7 +62,9 @@
     <div class="card2">
       <div style="margin-bottom: 12px;">
         <h3 style="font-size: 15px; font-weight: 600; font-family: 'Libre Baskerville', serif; color: #0F1E3C;">Encuesta de heteroevaluación docente</h3>
-        <p style="font-size: 12px; color: #9CA3AF; margin-top: 3px;">Cohorte B 2025 · 23 preguntas · Anónima · Google Forms</p>
+        <p style="font-size: 12px; color: #9CA3AF; margin-top: 3px;">
+          {% if cohorte_actual %}{{ cohorte_actual.nombre }}{% else %}Sin cohorte seleccionada{% endif %} · 23 preguntas · Anónima · Google Forms
+        </p>
       </div>
 
       <div class="status-bar" id="status-bar" style="background: #F8F8F6; border: 0.5px solid #E0E0E0;">
@@ -126,15 +128,21 @@
   <!-- SIDEBAR -->
   <div class="hetero-sidebar">
     <div class="card2" id="sidebar-cohorts">
-      <p class="section-label">Cohortes</p>
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:0.5px solid #F0F0F0;">
-        <span style="font-size:13px; color:#374151;">Cohorte B 2025</span>
-        <span id="badge-b2025" style="font-size:11px; padding:2px 10px; border-radius:4px; font-weight:600; background:#F3F4F6; color:#9CA3AF;">Sin datos</span>
-      </div>
+      <p class="section-label">Cohorte seleccionada</p>
+      {% if cohorte_actual %}
       <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0;">
-        <span style="font-size:13px; color:#374151;">Cohorte A 2025</span>
-        <span style="font-size:11px; padding:2px 10px; border-radius:4px; font-weight:600; background:#DCFCE7; color:#15803D;">Sincronizado</span>
+        <span style="font-size:13px; font-weight:600; color:#0F1E3C;">{{ cohorte_actual.nombre }}</span>
+        <span id="badge-cohorte" style="font-size:11px; padding:2px 10px; border-radius:4px; font-weight:600; background:#F3F4F6; color:#9CA3AF;">Sin datos</span>
       </div>
+      <div style="margin-top:8px;">
+        <a href="/?cohorte={{ cohorte_actual.id }}" style="font-size:12px; color:#1B3A6B; text-decoration:none;">← Ver resultado de esta cohorte</a>
+      </div>
+      {% else %}
+      <div style="padding:16px 0; text-align:center;">
+        <p style="font-size:13px; color:#9CA3AF; margin-bottom:10px;">Ninguna cohorte seleccionada</p>
+        <a href="/cohortes/" style="font-size:12px; color:#1B3A6B;">Ir a cohortes →</a>
+      </div>
+      {% endif %}
     </div>
 
     <div class="card2" id="sidebar-results" style="display:none;">
@@ -215,9 +223,9 @@
         document.getElementById('m-puntaje').style.color = '#15803D';
         document.getElementById('m-puntaje').textContent = data.ef_puntaje;
 
-        document.getElementById('badge-b2025').style.background = '#DCFCE7';
-        document.getElementById('badge-b2025').style.color = '#15803D';
-        document.getElementById('badge-b2025').textContent = 'Sincronizado';
+        document.getElementById('badge-cohorte') && (document.getElementById('badge-cohorte').style.background = '#DCFCE7');
+        document.getElementById('badge-cohorte') && (document.getElementById('badge-cohorte').style.color = '#15803D');
+        document.getElementById('badge-cohorte') && (document.getElementById('badge-cohorte').textContent = 'Sincronizado');
 
         document.getElementById('sidebar-cohorts').style.display = 'none';
         document.getElementById('sidebar-results').style.display = 'block';

@@ -196,9 +196,14 @@ def cohortes(request):
 def encuesta(request):
     preguntas = PreguntaEncuesta.objects.all().order_by('orden')
     cohortes = Cohorte.objects.all()
+    cohorte_id = request.GET.get('cohorte')
+    cohorte_actual = None
+    if cohorte_id:
+        cohorte_actual = get_object_or_404(Cohorte, id=cohorte_id)
     return render(request, 'seguimiento_syllabus/encuesta.html', {
         'preguntas': preguntas,
         'cohortes': cohortes,
+        'cohorte_actual': cohorte_actual,
     })
 
 
