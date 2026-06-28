@@ -97,21 +97,34 @@ def resultado(request):
     datos_ef = _calcular_ef_desde_csv()
     ef_disponible = datos_ef is not None
 
+    # EF2: calculado desde documentos subidos (acta, malla, syllabus)
+    tiene_acta     = evidencias_info.get('acta', {}).get('subida', False)
+    tiene_malla    = evidencias_info.get('malla', {}).get('subida', False)
+    tiene_syllabus = evidencias_info.get('syllabus', {}).get('subida', False)
+    docs_subidos   = sum([tiene_acta, tiene_malla, tiene_syllabus])
+    ef2_real       = round(docs_subidos / 3, 4)
+
+    # EF5: fijo en 0.68 (normativa institucional, pendiente fuente real)
+    ef5_real = 0.68
+
     if ef_disponible:
         ef1 = datos_ef['ef1']
-        ef2 = datos_ef['ef2']
         ef3 = datos_ef['ef3']
         ef4 = datos_ef['ef4']
-        ef5 = datos_ef['ef5']
-        ef_puntaje = datos_ef['ef_puntaje']
+        ef2 = ef2_real
+        ef5 = ef5_real
+        ef_puntaje = round(ef1*0.33 + ef2*0.27 + ef3*0.20 + ef4*0.13 + ef5*0.07, 2)
         respuestas = datos_ef['respuestas']
         promedio_general = datos_ef['promedio_general']
     else:
-        ef1 = ef2 = ef3 = ef4 = ef5 = ef_puntaje = 0.0
+        ef1 = ef3 = ef4 = 0.0
+        ef2 = ef2_real
+        ef5 = ef5_real
+        ef_puntaje = round(ef2*0.27 + ef5*0.07, 2)
         respuestas = 0
         promedio_general = 0
 
-    if ef_disponible and ef_puntaje > 0:
+    if ef_puntaje > 0:
         resultado_final = round(ef_puntaje * 100, 1)
         fuente_resultado = 'combinado'
     else:
