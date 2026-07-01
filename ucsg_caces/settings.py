@@ -38,11 +38,14 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'rest_framework',
+    'corsheaders',
     'seguimiento_syllabus',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -50,6 +53,20 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+
+# Mientras desarrollas el frontend React por separado (ej. npm run dev en :5173),
+# esto permite que te hable a la API sin bloqueos de CORS.
+# En producción, mejor especificar el dominio exacto en vez de allow all.
+CORS_ALLOW_ALL_ORIGINS = DEBUG
+
+# Forzamos que la API SIEMPRE responda en JSON (nunca en HTML "navegable"),
+# así evitamos el error TemplateDoesNotExist al abrir una URL de /api/ desde
+# el navegador, y el frontend React siempre recibe lo que espera.
+REST_FRAMEWORK = {
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+    ],
+}
 
 ROOT_URLCONF = 'ucsg_caces.urls'
 

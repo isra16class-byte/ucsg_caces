@@ -7,19 +7,29 @@ class Cohorte(models.Model):
     def __str__(self):
         return self.nombre
 
+
+class Asignatura(models.Model):
+    cohorte = models.ForeignKey(Cohorte, on_delete=models.CASCADE, related_name='asignaturas')
+    nombre = models.CharField(max_length=150)
+    docente = models.CharField(max_length=150, blank=True, default='')
+
+    def __str__(self):
+        return f"{self.nombre} ({self.cohorte})"
+
+
 class Evidencia(models.Model):
     TIPO_CHOICES = [
         ('malla', 'Malla Curricular'),
         ('syllabus', 'Syllabus'),
         ('acta', 'Acta de Retroalimentación'),
     ]
-    cohorte = models.ForeignKey(Cohorte, on_delete=models.CASCADE)
+    asignatura = models.ForeignKey(Asignatura, on_delete=models.CASCADE, related_name='evidencias')
     tipo = models.CharField(max_length=20, choices=TIPO_CHOICES)
     archivo = models.FileField(upload_to='evidencias/')
     fecha_subida = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.tipo} - {self.cohorte}"
+        return f"{self.tipo} - {self.asignatura}"
 
 class PreguntaEncuesta(models.Model):
     texto = models.TextField()
