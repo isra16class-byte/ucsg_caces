@@ -12,7 +12,8 @@ from .serializers import (
 # Reutilizamos la lógica de negocio centralizada en views.py; no se duplica.
 from .views import (  # noqa: F401
     _calcular_ef_desde_csv, _buscar_columna,
-    calcular_resultado_asignatura, obtener_materias_disponibles,
+    calcular_resultado_asignatura, calcular_resultado_general,
+    obtener_materias_disponibles,
 )
 
 
@@ -116,7 +117,8 @@ def api_resultado(request):
     return Response(resultado)
 
 
-# ---------- Resultado agregado de toda la cohorte (promedio de asignaturas) ----------
+# ---------- Resultado GENERAL de la cohorte (como lo evalúa CACES: todas las
+# evidencias + toda la encuesta juntas, sin separar por asignatura) ----------
 
 @api_view(['GET'])
 def api_resultado_cohorte(request):
@@ -125,25 +127,24 @@ def api_resultado_cohorte(request):
         return Response({'error': 'Se requiere el parámetro "cohorte".'}, status=status.HTTP_400_BAD_REQUEST)
 
     cohorte = get_object_or_404(Cohorte, id=cohorte_id)
-    asignaturas = Asignatura.objects.filter(cohorte=cohorte)
+    resultado = calcular_resultado_general(cohorte)
+    resultado['cohorte'] = CohorteSerializer(cohorte).data
 
-    resultados = []
+    # Además, incluimos el detalle por asignatura (útil para la lista lateral
+    # del frontend, mostrando el % de cada una junto al general).
+    asignaturas = Asignatura.objects.filter(cohorte=cohorte)
+    detalle_asignaturas = []
     for asignatura in asignaturas:
         r = calcular_resultado_asignatura(asignatura)
-        resultados.append({
+        detalle_asignaturas.append({
             'asignatura': AsignaturaSerializer(asignatura).data,
             'resultado_final': r['resultado_final'],
             'escala': r['escala'],
             'color_escala': r['color_escala'],
         })
+    resultado['asignaturas'] = detalle_asignaturas
 
-    promedio = round(sum(r['resultado_final'] for r in resultados) / len(resultados), 1) if resultados else 0
-
-    return Response({
-        'cohorte': CohorteSerializer(cohorte).data,
-        'promedio_general': promedio,
-        'asignaturas': resultados,
-    })
+    return Response(resultado)
 
 
 # ---------- Encuesta ----------

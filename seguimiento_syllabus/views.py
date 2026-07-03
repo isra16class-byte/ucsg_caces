@@ -119,18 +119,20 @@ def _calcular_ef_desde_csv(materia=None):
     }
 
 
-def calcular_resultado_asignatura(asignatura):
+def _calcular_resultado_generico(evidencias_qs, materia_filtro):
     """
-    Lógica central: calcula el resultado EF1-EF5 para UNA asignatura,
-    combinando la encuesta (filtrada por materia) con sus evidencias.
-    Reutilizada tanto por las vistas HTML legacy como por la API.
+    Núcleo del cálculo EF1-EF5, parametrizado por:
+    - evidencias_qs: queryset de Evidencia a considerar (de una asignatura,
+      o de TODA la cohorte).
+    - materia_filtro: nombre de materia para filtrar la encuesta (una
+      asignatura), o None para agregarla completa (evaluación general
+      de la cohorte, tal como la evalúa CACES).
     """
     evidencias_info = {
         'malla':    {'subida': False, 'label': 'Malla Curricular'},
         'syllabus': {'subida': False, 'label': 'Syllabus'},
         'acta':     {'subida': False, 'label': 'Acta de Retroalimentación'},
     }
-    evidencias_qs = Evidencia.objects.filter(asignatura=asignatura)
     total_evidencias = evidencias_qs.count()
     for ev in evidencias_qs:
         if ev.tipo in evidencias_info:
@@ -138,7 +140,7 @@ def calcular_resultado_asignatura(asignatura):
 
     pct_evidencias = round(total_evidencias / 3 * 100, 1) if total_evidencias > 0 else 0
 
-    datos_ef = _calcular_ef_desde_csv(materia=asignatura.nombre)
+    datos_ef = _calcular_ef_desde_csv(materia=materia_filtro)
     ef_disponible = datos_ef is not None and datos_ef['respuestas'] > 0
 
     tiene_acta     = evidencias_info.get('acta', {}).get('subida', False)
@@ -207,6 +209,26 @@ def calcular_resultado_asignatura(asignatura):
         'respuestas': respuestas,
         'promedio_general': promedio_general,
     }
+
+
+def calcular_resultado_asignatura(asignatura):
+    """
+    Calcula el resultado EF1-EF5 para UNA asignatura: solo sus evidencias,
+    y la encuesta filtrada por su nombre de materia.
+    """
+    evidencias_qs = Evidencia.objects.filter(asignatura=asignatura)
+    return _calcular_resultado_generico(evidencias_qs, materia_filtro=asignatura.nombre)
+
+
+def calcular_resultado_general(cohorte):
+    """
+    Calcula el resultado EF1-EF5 AGREGADO de toda la cohorte: TODAS las
+    evidencias de TODAS sus asignaturas, y TODA la encuesta sin filtrar
+    por materia. Esta es la forma en que CACES evalúa el indicador 11.2:
+    como un solo bloque, marcando las casillas EF a nivel de cohorte/carrera.
+    """
+    evidencias_qs = Evidencia.objects.filter(asignatura__cohorte=cohorte)
+    return _calcular_resultado_generico(evidencias_qs, materia_filtro=None)
 
 
 # ──────────────────────────────────────────────────────────────────────────
