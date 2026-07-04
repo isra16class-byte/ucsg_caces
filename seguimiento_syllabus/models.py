@@ -30,19 +30,3 @@ class Evidencia(models.Model):
 
     def __str__(self):
         return f"{self.tipo} - {self.asignatura}"
-
-class PreguntaEncuesta(models.Model):
-    texto = models.TextField()
-    orden = models.IntegerField()
-
-    def __str__(self):
-        return f"Pregunta {self.orden}: {self.texto[:50]}"
-
-class RespuestaEncuesta(models.Model):
-    pregunta = models.ForeignKey(PreguntaEncuesta, on_delete=models.CASCADE)
-    cohorte = models.ForeignKey(Cohorte, on_delete=models.CASCADE)
-    respuesta_si = models.IntegerField(default=0)
-    respuesta_no = models.IntegerField(default=0)
-
-    def __str__(self):
-        return f"Respuesta - {self.pregunta} - {self.cohorte}"

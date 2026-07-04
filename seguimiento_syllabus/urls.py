@@ -1,16 +1,7 @@
 from django.urls import path
-from . import views
 from . import api_views
 
 urlpatterns = [
-    # Vistas HTML existentes (sin cambios)
-    path('', views.resultado, name='resultado'),
-    path('cohortes/', views.cohortes, name='cohortes'),
-    path('evidencias/', views.evidencias, name='evidencias'),
-    path('encuesta/', views.encuesta, name='encuesta'),
-    path('encuesta/resultados/', views.calcular_resultados_encuesta, name='encuesta_resultados'),
-    path('ficha-tecnica/', views.ficha_tecnica, name='ficha_tecnica'),
-
     # API JSON nueva, para el frontend React
     path('api/cohortes/', api_views.api_cohortes, name='api_cohortes'),
     path('api/asignaturas/', api_views.api_asignaturas, name='api_asignaturas'),

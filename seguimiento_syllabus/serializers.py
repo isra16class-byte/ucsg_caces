@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Cohorte, Asignatura, Evidencia, PreguntaEncuesta, RespuestaEncuesta
+from .models import Cohorte, Asignatura, Evidencia
 
 
 class CohorteSerializer(serializers.ModelSerializer):
@@ -37,15 +37,3 @@ class EvidenciaSerializer(serializers.ModelSerializer):
 
     def get_archivo_nombre(self, obj):
         return obj.archivo.name.split('/')[-1] if obj.archivo else None
-
-
-class PreguntaEncuestaSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = PreguntaEncuesta
-        fields = ['id', 'texto', 'orden']
-
-
-class RespuestaEncuestaSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = RespuestaEncuesta
-        fields = ['id', 'pregunta', 'cohorte', 'respuesta_si', 'respuesta_no']

@@ -4,14 +4,11 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 
-from .models import Cohorte, Asignatura, Evidencia, PreguntaEncuesta, RespuestaEncuesta
-from .serializers import (
-    CohorteSerializer, AsignaturaSerializer, EvidenciaSerializer,
-    PreguntaEncuestaSerializer, RespuestaEncuestaSerializer,
-)
+from .models import Cohorte, Asignatura, Evidencia
+from .serializers import CohorteSerializer, AsignaturaSerializer, EvidenciaSerializer
 # Reutilizamos la lógica de negocio centralizada en views.py; no se duplica.
 from .views import (  # noqa: F401
-    _calcular_ef_desde_csv, _buscar_columna,
+    _calcular_ef_desde_csv,
     calcular_resultado_asignatura, calcular_resultado_general,
     obtener_materias_disponibles,
 )
@@ -151,14 +148,13 @@ def api_resultado_cohorte(request):
 
 @api_view(['GET'])
 def api_encuesta(request):
-    preguntas = PreguntaEncuesta.objects.all().order_by('orden')
     cohorte_id = request.GET.get('cohorte')
     cohorte_actual = None
     if cohorte_id:
         cohorte_actual = get_object_or_404(Cohorte, id=cohorte_id)
 
     return Response({
-        'preguntas': PreguntaEncuestaSerializer(preguntas, many=True).data,
+        'preguntas': [],
         'cohorte_actual': CohorteSerializer(cohorte_actual).data if cohorte_actual else None,
     })
 
