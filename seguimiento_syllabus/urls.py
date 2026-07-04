@@ -4,6 +4,7 @@ from . import api_views
 urlpatterns = [
     # API JSON nueva, para el frontend React
     path('api/cohortes/', api_views.api_cohortes, name='api_cohortes'),
+    path('api/periodos/', api_views.api_periodos, name='api_periodos'),
     path('api/asignaturas/', api_views.api_asignaturas, name='api_asignaturas'),
     path('api/materias-encuesta/', api_views.api_materias_encuesta, name='api_materias_encuesta'),
     path('api/evidencias/', api_views.api_evidencias, name='api_evidencias'),

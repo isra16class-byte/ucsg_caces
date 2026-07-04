@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Cohorte, Asignatura, Evidencia
+from .models import Cohorte, PeriodoAcademico, Asignatura, Evidencia
 
 
 class CohorteSerializer(serializers.ModelSerializer):
@@ -8,10 +8,16 @@ class CohorteSerializer(serializers.ModelSerializer):
         fields = ['id', 'nombre', 'activo']
 
 
+class PeriodoAcademicoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PeriodoAcademico
+        fields = ['id', 'cohorte', 'nombre', 'orden', 'fecha_inicio', 'fecha_fin']
+
+
 class AsignaturaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Asignatura
-        fields = ['id', 'cohorte', 'nombre', 'docente']
+        fields = ['id', 'periodo_academico', 'nombre', 'docente']
 
 
 class EvidenciaSerializer(serializers.ModelSerializer):
@@ -23,7 +29,7 @@ class EvidenciaSerializer(serializers.ModelSerializer):
         model = Evidencia
         fields = [
             'id', 'asignatura', 'tipo', 'tipo_display',
-            'archivo', 'archivo_url', 'archivo_nombre', 'fecha_subida',
+            'archivo', 'archivo_url', 'archivo_nombre', 'subido_por', 'fecha_subida', 'vigente',
         ]
         extra_kwargs = {
             'archivo': {'write_only': True},
