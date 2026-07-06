@@ -161,19 +161,28 @@ def _calcular_resultado_generico(evidencias_qs, materia_filtro):
     ef3_estado = 'ok' if tiene_ef3 else 'sin_datos'
     ef5_estado = 'ok' if tiene_ef5 else 'sin_datos'
 
+    # IMPORTANTE: cada EF documental se calcula de forma INDEPENDIENTE según
+    # su propia evidencia — no se pone en None en bloque solo porque a otro
+    # EF (o a la encuesta) le falte información. Antes, si por ejemplo faltaba
+    # evidencia de EF5, el sistema también borraba el valor de EF2 y EF3 aunque
+    # SÍ tuvieran su evidencia subida, y la UI terminaba mostrando "0%" en vez
+    # de "Sin datos" (porque el estado decía "ok" pero el valor era None). Ver
+    # sección 4 del documento de contexto: "si falta evidencia de un EF, el
+    # sistema NO inventa un 0%, muestra Sin datos SOLO en ese EF puntual".
+    ef2 = 1.0 if tiene_ef2 else None
+    ef3_doc = 1.0 if tiene_ef3 else None
+    ef5 = 1.0 if tiene_ef5 else None
+
+    # La valoración/resultado AGREGADO (el % final del indicador) sigue
+    # exigiendo que los 5 EF estén completos — eso sí sigue siendo "todo o
+    # nada", tal como está documentado y decidido para el indicador general.
     if ef_disponible and ef2_estado == 'ok' and ef3_estado == 'ok' and ef5_estado == 'ok':
-        ef2 = 1.0
-        ef3_doc = 1.0
-        ef5 = 1.0
         ef_puntaje = round(ef1 * 0.33 + ef2 * 0.27 + ef3_doc * 0.20 + ef4 * 0.13 + ef5 * 0.07, 4)
         valoracion_general = round(ef_puntaje * 100, 1)
         resultado_final = valoracion_general
         estado_general = 'completo'
         fuente_resultado = 'combinado'
     else:
-        ef2 = None
-        ef3_doc = None
-        ef5 = None
         ef_puntaje = None
         valoracion_general = None
         resultado_final = None

@@ -126,7 +126,19 @@ def api_evidencias(request):
         data['asignatura'] = str(asignatura.id)
         serializer = EvidenciaSerializer(data=data, context={'request': request})
         if serializer.is_valid():
-            serializer.save()
+            # IMPORTANTE: forzamos vigente=True explícitamente en save().
+            # Motivo: el frontend sube evidencia como multipart/form-data (FormData)
+            # y nunca manda el campo "vigente". Django REST Framework trata los
+            # BooleanField de datos tipo formulario HTML con su propio
+            # "default_empty_html", que para BooleanField es False (misma lógica
+            # que un checkbox sin marcar) — NO usa el default=True del modelo.
+            # Sin este override, toda evidencia nueva quedaba guardada con
+            # vigente=False, y como _calcular_resultado_generico() en views.py
+            # filtra evidencias_qs.filter(vigente=True), esas evidencias nunca se
+            # contaban para EF2/EF3/EF5. Por eso "Resultados" nunca reflejaba las
+            # evidencias recién subidas, aunque en la pestaña "Evidencias" sí se
+            # vieran como "Cargado ✓" (esa vista no filtra por vigente).
+            serializer.save(vigente=True)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
