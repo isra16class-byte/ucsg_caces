@@ -237,12 +237,103 @@ def calcular_resultado_asignatura(asignatura):
 
 def calcular_resultado_general(cohorte, periodo=None):
     """
-    Calcula el resultado EF1-EF5 AGREGADO de toda la cohorte: TODAS las
-    evidencias de TODAS sus asignaturas, y TODA la encuesta sin filtrar
-    por materia. Esta es la forma en que CACES evalúa el indicador 11.2:
-    como un solo bloque, marcando las casillas EF a nivel de cohorte/carrera.
+    Calcula el resultado EF1-EF5 AGREGADO del PAO/cohorte promediando los
+    resultados por asignatura. Cada EF ignora valores nulos antes de
+    promediar; si un EF no tiene ningún dato disponible, queda en
+    'sin_datos' y la valoración general se marca como incompleta.
     """
-    evidencias_qs = Evidencia.objects.filter(asignatura__periodo_academico__cohorte=cohorte)
+    asignaturas_qs = Asignatura.objects.filter(periodo_academico__cohorte=cohorte)
     if periodo is not None:
-        evidencias_qs = evidencias_qs.filter(asignatura__periodo_academico=periodo)
-    return _calcular_resultado_generico(evidencias_qs, materia_filtro=None)
+        asignaturas_qs = asignaturas_qs.filter(periodo_academico=periodo)
+
+    resultados = [calcular_resultado_asignatura(asignatura) for asignatura in asignaturas_qs]
+    evidencias_qs = Evidencia.objects.filter(asignatura__in=asignaturas_qs, vigente=True)
+
+    agregados = {}
+    estados = {}
+    for ef in ['ef1', 'ef2', 'ef3', 'ef4', 'ef5']:
+        valores = [resultado[ef] for resultado in resultados if resultado[ef] is not None]
+        agregados[ef] = round(sum(valores) / len(valores), 1) if valores else None
+        estados[f'{ef}_estado'] = 'ok' if valores else 'sin_datos'
+
+    ef_disponible = any(resultado['ef_disponible'] for resultado in resultados)
+    respuestas = sum(resultado['respuestas'] for resultado in resultados)
+    promedio_general = round(
+        sum(resultado['promedio_general'] for resultado in resultados if resultado['promedio_general'] is not None) /
+        len([resultado for resultado in resultados if resultado['promedio_general'] is not None]),
+        1,
+    ) if any(resultado['promedio_general'] is not None for resultado in resultados) else 0
+
+    total_asignaturas = asignaturas_qs.count()
+    total_evidencias = evidencias_qs.count()
+    pct_evidencias = round(total_evidencias / (total_asignaturas * 3) * 100, 1) if total_asignaturas > 0 else 0
+
+    if all(estados[f'ef{i}_estado'] == 'ok' for i in range(1, 6)):
+        ef_puntaje = round(
+            (agregados['ef1'] / 100) * 0.33 +
+            (agregados['ef2'] / 100) * 0.27 +
+            (agregados['ef3'] / 100) * 0.20 +
+            (agregados['ef4'] / 100) * 0.13 +
+            (agregados['ef5'] / 100) * 0.07,
+            4,
+        )
+        valoracion_general = round(ef_puntaje * 100, 1)
+        resultado_final = valoracion_general
+        estado_general = 'completo'
+    else:
+        ef_puntaje = None
+        valoracion_general = None
+        resultado_final = None
+        estado_general = 'incompleto'
+
+    if valoracion_general is not None and valoracion_general >= 75:
+        escala = 'Satisfactorio'
+        color_escala = '#15803D'
+    elif valoracion_general is not None and valoracion_general >= 50:
+        escala = 'Cuasi Satisfactorio'
+        color_escala = '#CA8A04'
+    elif valoracion_general is not None and valoracion_general >= 25:
+        escala = 'Poco Satisfactorio'
+        color_escala = '#F97316'
+    elif valoracion_general is not None:
+        escala = 'Deficiente'
+        color_escala = '#EF4444'
+    else:
+        escala = None
+        color_escala = None
+
+    evidencias_info = {
+        'malla_curricular': {'subida': evidencias_qs.filter(tipo='malla_curricular').exists(), 'label': 'Malla Curricular'},
+        'syllabus': {'subida': evidencias_qs.filter(tipo='syllabus').exists(), 'label': 'Syllabus'},
+        'acta_retroalimentacion': {'subida': evidencias_qs.filter(tipo='acta_retroalimentacion').exists(), 'label': 'Acta de Retroalimentación'},
+        'acta_ajuste_curricular': {'subida': evidencias_qs.filter(tipo='acta_ajuste_curricular').exists(), 'label': 'Acta de Ajuste Curricular (EF2)'},
+        'evidencia_difusion': {'subida': evidencias_qs.filter(tipo='evidencia_difusion').exists(), 'label': 'Evidencia de Difusión (EF3)'},
+        'reglamento_normativa': {'subida': evidencias_qs.filter(tipo='reglamento_normativa').exists(), 'label': 'Reglamento / Normativa Institucional (EF5)'},
+    }
+
+    return {
+        'resultado_final': resultado_final,
+        'valoracion_general': valoracion_general,
+        'estado_general': estado_general,
+        'escala': escala,
+        'color_escala': color_escala,
+        'fuente_resultado': 'agregado_por_asignatura',
+        'dash': round(resultado_final * 3.393, 1) if resultado_final is not None else None,
+        'evidencias_info': evidencias_info,
+        'total_evidencias': total_evidencias,
+        'pct_evidencias': pct_evidencias,
+        'ef_disponible': ef_disponible,
+        'ef1': agregados['ef1'],
+        'ef1_estado': estados['ef1_estado'],
+        'ef2': agregados['ef2'],
+        'ef2_estado': estados['ef2_estado'],
+        'ef3': agregados['ef3'],
+        'ef3_estado': estados['ef3_estado'],
+        'ef4': agregados['ef4'],
+        'ef4_estado': estados['ef4_estado'],
+        'ef5': agregados['ef5'],
+        'ef5_estado': estados['ef5_estado'],
+        'ef_puntaje': ef_puntaje,
+        'respuestas': respuestas,
+        'promedio_general': promedio_general,
+    }

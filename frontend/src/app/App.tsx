@@ -7,6 +7,13 @@ import { toast, Toaster } from "sonner";
 import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer,
 } from "recharts";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./components/ui/select";
 
 // ─────────────────────────────────────────────────────────────────────────
 // CONFIGURACIÓN: cambia esto según dónde corra tu Django.
@@ -16,42 +23,67 @@ const API_BASE = "http://localhost:8000";
 // ── Tipos que vienen de la API (coinciden con tus serializers de Django) ──
 interface Cohorte { id: number; nombre: string; activo: boolean; }
 
-interface Asignatura { id: number; cohorte: number; nombre: string; docente: string; }
+interface PeriodoAcademico {
+  id: number;
+  cohorte: number;
+  nombre: string;
+  orden: number;
+  fecha_inicio: string | null;
+  fecha_fin: string | null;
+}
+
+interface Asignatura { id: number; periodo_academico: number; nombre: string; docente: string; }
 
 interface Evidencia {
   id: number;
   asignatura: number;
-  tipo: "malla" | "syllabus" | "acta";
+  tipo: "malla_curricular" | "syllabus" | "acta_retroalimentacion" | "acta_ajuste_curricular" | "evidencia_difusion" | "reglamento_normativa";
   tipo_display: string;
   archivo_url: string;
   archivo_nombre: string;
+  subido_por: string;
   fecha_subida: string;
+  vigente: boolean;
 }
 
 interface Resultado {
   asignatura: Asignatura;
-  resultado_final: number;
-  escala: string;
-  color_escala: string;
+  resultado_final: number | null;
+  valoracion_general: number | null;
+  estado_general: "completo" | "incompleto";
+  escala: string | null;
+  color_escala: string | null;
   evidencias_info: Record<string, { subida: boolean; label: string }>;
   total_evidencias: number;
+  pct_evidencias: number;
   ef_disponible: boolean;
-  ef1: number; ef2: number; ef3: number; ef4: number; ef5: number;
-  ef_puntaje: number;
+  ef1: number | null; ef1_estado: "ok" | "sin_datos";
+  ef2: number | null; ef2_estado: "ok" | "sin_datos";
+  ef3: number | null; ef3_estado: "ok" | "sin_datos";
+  ef4: number | null; ef4_estado: "ok" | "sin_datos";
+  ef5: number | null; ef5_estado: "ok" | "sin_datos";
+  ef_puntaje: number | null;
   respuestas: number;
   promedio_general: number;
 }
 
 interface ResultadoCohorte {
   cohorte: Cohorte;
-  resultado_final: number;
-  escala: string;
-  color_escala: string;
-  ef1: number; ef2: number; ef3: number; ef4: number; ef5: number;
+  periodo?: PeriodoAcademico | null;
+  resultado_final: number | null;
+  valoracion_general: number | null;
+  estado_general: "completo" | "incompleto";
+  escala: string | null;
+  color_escala: string | null;
+  ef1: number | null; ef1_estado: "ok" | "sin_datos";
+  ef2: number | null; ef2_estado: "ok" | "sin_datos";
+  ef3: number | null; ef3_estado: "ok" | "sin_datos";
+  ef4: number | null; ef4_estado: "ok" | "sin_datos";
+  ef5: number | null; ef5_estado: "ok" | "sin_datos";
   ef_disponible: boolean;
   respuestas: number;
   total_evidencias: number;
-  asignaturas: { asignatura: Asignatura; resultado_final: number; escala: string; color_escala: string }[];
+  asignaturas: { asignatura: Asignatura; resultado_final: number | null; escala: string | null; color_escala: string | null }[];
 }
 
 type TabId = "resultado" | "evidencias" | "ficha";
@@ -65,7 +97,8 @@ const BG_HEADER = "#F8FAFD";
 const SERIF = "'Libre Baskerville',serif";
 const MONO = "'DM Mono',monospace";
 
-function getStatusColor(escala: string) {
+function getStatusColor(escala: string | null) {
+  if (!escala) return { bg: "#EEF2F7", color: "#64748B" };
   switch (escala) {
     case "Satisfactorio": return { bg: "#DCFCE7", color: "#15803D" };
     case "Cuasi Satisfactorio": return { bg: "#FEF9C3", color: "#CA8A04" };
@@ -87,8 +120,11 @@ async function apiFetch(path: string, options?: RequestInit) {
 export default function App() {
   const [cohortes, setCohortes] = useState<Cohorte[]>([]);
   const [cohorteId, setCohorteId] = useState<number | null>(null);
+  const [periodos, setPeriodos] = useState<PeriodoAcademico[]>([]);
+  const [periodoId, setPeriodoId] = useState<number | null>(null);
   const [asignaturas, setAsignaturas] = useState<Asignatura[]>([]);
   const [asignaturaId, setAsignaturaId] = useState<number | null>(null);
+  const [resultadoRefreshToken, setResultadoRefreshToken] = useState(0);
   const [tab, setTab] = useState<TabId>("resultado");
   const [loading, setLoading] = useState(true);
   const [resumenCohorte, setResumenCohorte] = useState<ResultadoCohorte | null>(null);
@@ -100,19 +136,59 @@ export default function App() {
     try {
       const data: Cohorte[] = await apiFetch("/api/cohortes/");
       setCohortes(data);
-      if (data.length > 0 && cohorteId === null) setCohorteId(data[0].id);
+      setCohorteId((prev) => {
+        if (prev !== null && data.some((c) => c.id === prev)) return prev;
+        return data[0]?.id ?? null;
+      });
     } catch (e: any) {
       toast.error(`No se pudo conectar con el backend: ${e.message}`);
     } finally {
       setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadAsignaturas = useCallback(async () => {
-    if (cohorteId === null) { setAsignaturas([]); return; }
+  const handleCohorteChange = useCallback((value: string) => {
+    const nextCohorteId = value ? Number(value) : null;
+    setCohorteId(nextCohorteId);
+    setPeriodoId(null);
+    setPeriodos([]);
+    setAsignaturas([]);
+    setAsignaturaId(null);
+    setResumenCohorte(null);
+  }, []);
+
+  const handlePeriodoChange = useCallback((value: string) => {
+    const nextPeriodoId = value ? Number(value) : null;
+    setPeriodoId(nextPeriodoId);
+    setAsignaturas([]);
+    setAsignaturaId(null);
+    setResumenCohorte(null);
+  }, []);
+
+  const loadPeriodos = useCallback(async () => {
+    if (cohorteId === null) {
+      setPeriodos([]);
+      setPeriodoId(null);
+      return;
+    }
     try {
-      const data: Asignatura[] = await apiFetch(`/api/asignaturas/?cohorte=${cohorteId}`);
+      const data: PeriodoAcademico[] = await apiFetch(`/api/periodos/?cohorte=${cohorteId}`);
+      setPeriodos(data);
+      setPeriodoId((prev) => {
+        if (prev !== null && data.some((p) => p.id === prev)) return prev;
+        return data[0]?.id ?? null;
+      });
+    } catch (e: any) {
+      toast.error(e.message);
+      setPeriodos([]);
+      setPeriodoId(null);
+    }
+  }, [cohorteId]);
+
+  const loadAsignaturas = useCallback(async () => {
+    if (periodoId === null) { setAsignaturas([]); return; }
+    try {
+      const data: Asignatura[] = await apiFetch(`/api/asignaturas/?periodo=${periodoId}`);
       setAsignaturas(data);
       if (data.length > 0) {
         setAsignaturaId((prev) => (prev && data.some((a) => a.id === prev) ? prev : data[0].id));
@@ -122,29 +198,36 @@ export default function App() {
     } catch (e: any) {
       toast.error(e.message);
     }
-  }, [cohorteId]);
+  }, [periodoId]);
 
   const loadResumenCohorte = useCallback(async () => {
-    if (cohorteId === null) { setResumenCohorte(null); return; }
+    if (cohorteId === null || periodoId === null) { setResumenCohorte(null); return; }
     try {
-      const data: ResultadoCohorte = await apiFetch(`/api/resultado-cohorte/?cohorte=${cohorteId}`);
+      const data: ResultadoCohorte = await apiFetch(`/api/resultado-cohorte/?cohorte=${cohorteId}&periodo=${periodoId}`);
       setResumenCohorte(data);
     } catch (e: any) {
       // silencioso: el resumen es un plus, no bloquea la vista principal
     }
-  }, [cohorteId]);
+  }, [cohorteId, periodoId]);
+
+  const handleEvidenceUploaded = useCallback(async () => {
+    setResultadoRefreshToken((current) => current + 1);
+    await loadResumenCohorte();
+  }, [loadResumenCohorte]);
 
   useEffect(() => { loadCohortes(); }, [loadCohortes]);
+  useEffect(() => { loadPeriodos(); }, [loadPeriodos]);
   useEffect(() => { loadAsignaturas(); loadResumenCohorte(); }, [loadAsignaturas, loadResumenCohorte]);
 
   async function handleCrearAsignatura(e: React.FormEvent) {
     e.preventDefault();
-    if (!nuevaAsignatura.trim() || cohorteId === null) return;
+    if (!nuevaAsignatura.trim() || periodoId === null) return;
     setCreandoAsignatura(true);
     try {
       const body = new URLSearchParams({
         nombre: nuevaAsignatura,
-        cohorte_id: String(cohorteId),
+        periodo_id: String(periodoId),
+        cohorte_id: String(cohorteId ?? ""),
         docente: nuevoDocente,
       });
       const creada: Asignatura = await apiFetch("/api/asignaturas/", {
@@ -166,10 +249,55 @@ export default function App() {
   }
 
   const asignaturaActual = asignaturas.find((a) => a.id === asignaturaId) ?? null;
+  const periodoActual = periodos.find((p) => p.id === periodoId) ?? null;
 
   return (
     <div className="h-screen flex flex-col" style={{ background: "#F4F6FA" }}>
       <Toaster position="top-right" richColors />
+
+      {/* Barra Cohorte/PAO */}
+      <div className="flex-shrink-0 px-6 py-3 flex items-center justify-between gap-4" style={{ background: "#fff", borderBottom: BORDER }}>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: SLATE }}>Contexto</span>
+          <span style={{ color: "#D1D5DB" }}>|</span>
+          <span className="text-xs font-bold px-1.5 py-0.5 rounded" style={{ background: BG_HEADER, color: NAVY }}>11.2</span>
+          <h1 className="text-base font-bold" style={{ fontFamily: SERIF, color: NAVY_DARK }}>Seguimiento de Syllabus</h1>
+        </div>
+
+        <div className="flex items-center gap-3 flex-wrap justify-end">
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-semibold" style={{ color: SLATE }}>Cohorte:</label>
+            <Select value={cohorteId !== null ? String(cohorteId) : ""} onValueChange={handleCohorteChange}>
+              <SelectTrigger className="w-[220px] rounded-xl" style={{ border: BORDER, color: NAVY_DARK, background: "#fff" }}>
+                <SelectValue placeholder="Seleccionar cohorte" />
+              </SelectTrigger>
+              <SelectContent>
+                {cohortes.map((c) => (
+                  <SelectItem key={c.id} value={String(c.id)}>{c.nombre}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-semibold" style={{ color: SLATE }}>PAO:</label>
+            <Select
+              value={periodoId !== null ? String(periodoId) : ""}
+              onValueChange={handlePeriodoChange}
+              disabled={cohorteId === null || periodos.length === 0}
+            >
+              <SelectTrigger className="w-[200px] rounded-xl" style={{ border: BORDER, color: NAVY_DARK, background: "#fff" }}>
+                <SelectValue placeholder={cohorteId === null ? "Selecciona cohorte" : "Seleccionar PAO"} />
+              </SelectTrigger>
+              <SelectContent>
+                {periodos.map((p) => (
+                  <SelectItem key={p.id} value={String(p.id)}>{p.nombre}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </div>
 
       {/* Header */}
       <div className="flex-shrink-0 px-6 py-3 flex items-center justify-between" style={{ background: "#fff", borderBottom: BORDER }}>
@@ -177,21 +305,8 @@ export default function App() {
           <ChevronLeft size={16} style={{ color: SLATE }} />
           <span className="text-xs font-semibold" style={{ color: SLATE }}>Docencia</span>
           <span style={{ color: "#D1D5DB" }}>|</span>
-          <span className="text-xs font-bold px-1.5 py-0.5 rounded" style={{ background: BG_HEADER, color: NAVY }}>11.2</span>
-          <h1 className="text-base font-bold" style={{ fontFamily: SERIF, color: NAVY_DARK }}>Seguimiento de Syllabus</h1>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <label className="text-xs font-semibold" style={{ color: SLATE }}>Cohorte:</label>
-          <select
-            value={cohorteId ?? ""}
-            onChange={(e) => setCohorteId(e.target.value ? Number(e.target.value) : null)}
-            className="text-sm px-3 py-1.5 rounded-lg"
-            style={{ border: BORDER, color: NAVY_DARK }}
-          >
-            <option value="">Seleccionar cohorte</option>
-            {cohortes.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-          </select>
+          <span className="text-xs text-white font-semibold px-2 py-0.5 rounded" style={{ background: NAVY }}>PAO {periodoActual?.nombre ?? "—"}</span>
+          <p className="text-sm font-bold" style={{ fontFamily: SERIF, color: NAVY_DARK }}>{cohorteActualLabel(cohortes, cohorteId)}</p>
         </div>
       </div>
 
@@ -228,6 +343,8 @@ export default function App() {
           asignaturaId={asignaturaId}
           setAsignaturaId={setAsignaturaId}
           asignaturaActual={asignaturaActual}
+          refreshToken={resultadoRefreshToken}
+          periodoActual={periodoActual}
           nuevaAsignatura={nuevaAsignatura}
           setNuevaAsignatura={setNuevaAsignatura}
           nuevoDocente={nuevoDocente}
@@ -257,7 +374,7 @@ export default function App() {
               <EmptyState icon={<FileText size={36} />} title="Sin asignaturas" subtitle="Crea una asignatura desde la pestaña Resultados." />
             ) : (
               <>
-                {tab === "evidencias" && <TabEvidencias asignatura={asignaturaActual} />}
+                {tab === "evidencias" && <TabEvidencias asignatura={asignaturaActual} onEvidenceUploaded={handleEvidenceUploaded} />}
                 {tab === "ficha" && <TabFicha />}
               </>
             )}
@@ -268,9 +385,13 @@ export default function App() {
   );
 }
 
+function cohorteActualLabel(cohortes: Cohorte[], cohorteId: number | null) {
+  return cohortes.find((c) => c.id === cohorteId)?.nombre || "—";
+}
+
 // ── Tab: Resultado — 3 columnas: General (izq) · Detalle+Lista (medio) · Radar por asignatura (der) ──
 function TabResultado({
-  resumenCohorte, asignaturas, asignaturaId, setAsignaturaId, asignaturaActual,
+  resumenCohorte, asignaturas, asignaturaId, setAsignaturaId, asignaturaActual, refreshToken, periodoActual,
   nuevaAsignatura, setNuevaAsignatura, nuevoDocente, setNuevoDocente,
   creandoAsignatura, handleCrearAsignatura, cohorteActual,
 }: {
@@ -279,6 +400,8 @@ function TabResultado({
   asignaturaId: number | null;
   setAsignaturaId: (id: number | null) => void;
   asignaturaActual: Asignatura | null;
+  refreshToken: number;
+  periodoActual: PeriodoAcademico | null;
   nuevaAsignatura: string;
   setNuevaAsignatura: (v: string) => void;
   nuevoDocente: string;
@@ -296,9 +419,9 @@ function TabResultado({
         <div className="flex-shrink-0 bg-white rounded-2xl px-5 py-4 flex items-center justify-between gap-3" style={{ border: BORDER }}>
           <div className="min-w-0">
             <p className="text-base font-bold truncate" style={{ color: NAVY_DARK }}>{cohorteActual?.nombre || "—"}</p>
-            <p className="text-sm mt-1" style={{ color: SLATE }}>Indicador 11.2 · Seguimiento de Syllabus</p>
+            <p className="text-sm mt-1" style={{ color: SLATE }}>Indicador 11.2 · Seguimiento de Syllabus · {periodoActual?.nombre || "PAO"}</p>
           </div>
-          {asignaturaActual && <ValoracionGeneral asignaturaId={asignaturaActual.id} />}
+          {resumenCohorte ? <ValoracionGeneral resumen={resumenCohorte} /> : <ValoracionGeneralCargando />}
         </div>
 
         {/* Formulario para agregar, colapsado detrás de un botón */}
@@ -350,7 +473,7 @@ function TabResultado({
                       <p className="text-sm font-semibold truncate" style={{ color: active ? NAVY : NAVY_DARK }}>{a.nombre}</p>
                     </div>
                     <span className="text-sm font-bold flex-shrink-0" style={{ color, fontFamily: MONO }}>
-                      {resumen ? `${resumen.resultado_final}%` : "—"}
+                      {resumen?.resultado_final ?? "—"}{resumen?.resultado_final !== null && resumen?.resultado_final !== undefined ? "%" : ""}
                     </span>
                   </button>
                 );
@@ -363,7 +486,7 @@ function TabResultado({
       {/* ── Derecha: Resultados por EF (radar + grid + Exportar PDF) ── */}
       <div className="flex-1 min-h-0 min-w-0">
         {asignaturaActual ? (
-          <ResultadosPorEF asignatura={asignaturaActual} />
+          <ResultadosPorEF asignatura={asignaturaActual} refreshToken={refreshToken} />
         ) : (
           <div className="h-full bg-white rounded-2xl flex items-center justify-center" style={{ border: BORDER }}>
             <p className="text-sm" style={{ color: "#9CA3AF" }}>Selecciona o crea una asignatura.</p>
@@ -374,21 +497,37 @@ function TabResultado({
   );
 }
 
-// ── Badge "Valoración General" (resultado de la asignatura seleccionada) ──
-function ValoracionGeneral({ asignaturaId }: { asignaturaId: number }) {
-  const [data, setData] = useState<Resultado | null>(null);
-  useEffect(() => {
-    setData(null);
-    apiFetch(`/api/resultado/?asignatura=${asignaturaId}`).then(setData).catch(() => {});
-  }, [asignaturaId]);
+function ValoracionGeneralCargando() {
+  return (
+    <div className="text-right flex-shrink-0">
+      <p className="text-sm" style={{ color: "#9CA3AF" }}>Calculando…</p>
+    </div>
+  );
+}
 
-  if (!data) return <div className="text-right flex-shrink-0"><p className="text-sm" style={{ color: "#9CA3AF" }}>Calculando…</p></div>;
-  const sc = getStatusColor(data.escala);
+// ── Badge "Valoración General" (resumen agregado del PAO/cohorte) ──
+function ValoracionGeneral({ resumen }: { resumen: ResultadoCohorte }) {
+  const sc = getStatusColor(resumen.escala);
+  const faltantes = [
+    resumen.ef2_estado === "sin_datos" ? "EF2" : null,
+    resumen.ef3_estado === "sin_datos" ? "EF3" : null,
+    resumen.ef5_estado === "sin_datos" ? "EF5" : null,
+  ].filter(Boolean) as string[];
   return (
     <div className="text-right flex-shrink-0">
       <p className="text-xs font-bold uppercase tracking-widest mb-1" style={{ color: SLATE }}>Valoración General</p>
-      <p className="text-4xl font-bold leading-none" style={{ color: sc.color, fontFamily: MONO }}>{data.resultado_final}%</p>
-      <p className="text-sm mt-1.5 font-semibold px-3 py-1 rounded-full inline-block" style={{ background: sc.bg, color: sc.color }}>{data.escala}</p>
+      <p className="text-[11px] mb-2" style={{ color: SLATE }}>Estimación interna — el resultado oficial lo determina el Comité de Evaluación Externo de CACES</p>
+      {resumen.estado_general === "incompleto" ? (
+        <div className="inline-flex flex-col items-end gap-1">
+          <p className="text-xl sm:text-2xl font-bold leading-tight" style={{ color: "#64748B", fontFamily: SERIF }}>Incompleto — falta evidencia</p>
+          <p className="text-xs font-semibold" style={{ color: "#94A3B8" }}>{faltantes.length ? `Falta evidencia de ${faltantes.join(", ")}` : "Faltan evidencias documentales"}</p>
+        </div>
+      ) : (
+        <>
+          <p className="text-4xl font-bold leading-none" style={{ color: sc.color, fontFamily: MONO }}>{resumen.resultado_final}%</p>
+          <p className="text-sm mt-1.5 font-semibold px-3 py-1 rounded-full inline-block" style={{ background: sc.bg, color: sc.color }}>{resumen.escala}</p>
+        </>
+      )}
     </div>
   );
 }
@@ -403,9 +542,10 @@ const EF_COLORS: Record<string, string> = {
 };
 
 // ── Celda individual de un EF (grid 2 columnas, estilo Figma) ────────────
-function EfCell({ label, code, value }: { label: string; code: string; value: number }) {
-  const bc = value >= 75 ? "#16A34A" : value >= 50 ? "#CA8A04" : "#DC2626";
-  const factorColor = EF_COLORS[code] || bc;
+function EfCell({ label, code, value, status }: { label: string; code: string; value: number | null; status: "ok" | "sin_datos" }) {
+  const numericValue = value ?? 0;
+  const bc = status === "sin_datos" ? "#CBD5E1" : numericValue >= 75 ? "#16A34A" : numericValue >= 50 ? "#CA8A04" : "#DC2626";
+  const factorColor = status === "sin_datos" ? "#94A3B8" : EF_COLORS[code] || bc;
   return (
     <div className="rounded-xl p-2.5" style={{ background: BG_HEADER, border: "1px solid rgba(27,58,107,0.07)" }}>
       <div className="flex items-center justify-between mb-1">
@@ -413,23 +553,23 @@ function EfCell({ label, code, value }: { label: string; code: string; value: nu
           <p className="font-medium leading-tight" style={{ color: "#4B5563", fontSize: 11 }}>{label}</p>
           <p style={{ color: factorColor, fontFamily: MONO, fontSize: 9 }}>{code}</p>
         </div>
-        <span className="font-bold" style={{ color: bc, fontFamily: MONO, fontSize: 14 }}>{value}%</span>
+        <span className="font-bold" style={{ color: bc, fontFamily: MONO, fontSize: 14 }}>{status === "sin_datos" ? "Sin datos" : `${numericValue}%`}</span>
       </div>
       <div className="h-1 rounded-full overflow-hidden" style={{ background: "#E5E7EB" }}>
-        <div className="h-full rounded-full" style={{ width: `${value}%`, background: bc }} />
+        <div className="h-full rounded-full" style={{ width: status === "sin_datos" ? "0%" : `${numericValue}%`, background: bc }} />
       </div>
     </div>
   );
 }
 
 // ── Panel derecho completo: "Resultados por EF" (radar + grid + Exportar PDF) ──
-function ResultadosPorEF({ asignatura }: { asignatura: Asignatura }) {
+function ResultadosPorEF({ asignatura, refreshToken }: { asignatura: Asignatura; refreshToken: number }) {
   const [data, setData] = useState<Resultado | null>(null);
 
   useEffect(() => {
     setData(null);
     apiFetch(`/api/resultado/?asignatura=${asignatura.id}`).then(setData).catch(() => {});
-  }, [asignatura.id]);
+  }, [asignatura.id, refreshToken]);
 
   if (!data) {
     return <div className="h-full bg-white rounded-2xl flex items-center justify-center" style={{ border: BORDER }}>
@@ -438,18 +578,18 @@ function ResultadosPorEF({ asignatura }: { asignatura: Asignatura }) {
   }
 
   const radarData = [
-    { subject: "EF1", score: data.ef1 },
-    { subject: "EF2", score: data.ef2 },
-    { subject: "EF3", score: data.ef3 },
-    { subject: "EF4", score: data.ef4 },
-    { subject: "EF5", score: data.ef5 },
+    { subject: "EF1", score: data.ef1 ?? 0 },
+    { subject: "EF2", score: data.ef2 ?? 0 },
+    { subject: "EF3", score: data.ef3 ?? 0 },
+    { subject: "EF4", score: data.ef4 ?? 0 },
+    { subject: "EF5", score: data.ef5 ?? 0 },
   ];
   const efs = [
-    { code: "EF1", label: "Seguimiento contenidos", value: data.ef1 },
-    { code: "EF2", label: "Mejora micro currículo", value: data.ef2 },
-    { code: "EF3", label: "Proceso difundido", value: data.ef3 },
-    { code: "EF4", label: "Difusión syllabus EVA", value: data.ef4 },
-    { code: "EF5", label: "Normativa institucional", value: data.ef5 },
+    { code: "EF1", label: "Seguimiento contenidos", value: data.ef1, status: data.ef1_estado },
+    { code: "EF2", label: "Mejora micro currículo", value: data.ef2, status: data.ef2_estado },
+    { code: "EF3", label: "Proceso difundido", value: data.ef3, status: data.ef3_estado },
+    { code: "EF4", label: "Difusión syllabus EVA", value: data.ef4, status: data.ef4_estado },
+    { code: "EF5", label: "Normativa institucional", value: data.ef5, status: data.ef5_estado },
   ];
   const sc = getStatusColor(data.escala);
 
@@ -462,7 +602,7 @@ function ResultadosPorEF({ asignatura }: { asignatura: Asignatura }) {
           <p className="text-xs mt-0.5 truncate max-w-52" style={{ color: SLATE }}>{asignatura.nombre}</p>
         </div>
         <span className="px-3 py-1 rounded-lg font-bold flex-shrink-0" style={{ background: sc.bg, color: sc.color, fontFamily: MONO, fontSize: 14 }}>
-          {data.resultado_final}%
+          {data.resultado_final === null ? "Incompleto" : `${data.resultado_final}%`}
         </span>
       </div>
 
@@ -480,21 +620,19 @@ function ResultadosPorEF({ asignatura }: { asignatura: Asignatura }) {
       {/* Grid de EF */}
       <div className="flex-1 px-5 pb-2 flex flex-col gap-1.5 min-h-0">
         <div className="grid grid-cols-2 gap-1.5 flex-shrink-0">
-          <EfCell code={efs[0].code} label={efs[0].label} value={efs[0].value} />
-          <EfCell code={efs[1].code} label={efs[1].label} value={efs[1].value} />
+          <EfCell code={efs[0].code} label={efs[0].label} value={efs[0].value} status={efs[0].status} />
+          <EfCell code={efs[1].code} label={efs[1].label} value={efs[1].value} status={efs[1].status} />
         </div>
         <div className="grid grid-cols-2 gap-1.5 flex-shrink-0">
-          <EfCell code={efs[2].code} label={efs[2].label} value={efs[2].value} />
-          <EfCell code={efs[3].code} label={efs[3].label} value={efs[3].value} />
+          <EfCell code={efs[2].code} label={efs[2].label} value={efs[2].value} status={efs[2].status} />
+          <EfCell code={efs[3].code} label={efs[3].label} value={efs[3].value} status={efs[3].status} />
         </div>
-        <EfCell code={efs[4].code} label={efs[4].label} value={efs[4].value} />
+        <EfCell code={efs[4].code} label={efs[4].label} value={efs[4].value} status={efs[4].status} />
 
         <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
           <AlertCircle size={10} style={{ color: "#94A3B8", flexShrink: 0 }} />
           <p style={{ color: "#94A3B8", fontSize: 10 }}>
-            {data.ef_disponible
-              ? `Calculado con ${data.respuestas} respuesta(s) de encuesta y ${data.total_evidencias}/3 evidencias.`
-              : "Sin respuestas de encuesta aún; basado en evidencias y normativa."}
+            EF1 y EF4: encuesta de heteroevaluación · EF2, EF3 y EF5: evidencia documental
           </p>
         </div>
       </div>
@@ -514,12 +652,15 @@ function ResultadosPorEF({ asignatura }: { asignatura: Asignatura }) {
 
 // ── Tab: Evidencias (diseño original de Figma: fuentes + vista previa) ────
 const TIPOS: { value: Evidencia["tipo"]; label: string }[] = [
-  { value: "malla", label: "Malla Curricular" },
+  { value: "malla_curricular", label: "Malla Curricular" },
   { value: "syllabus", label: "Syllabus" },
-  { value: "acta", label: "Acta de Retroalimentación" },
+  { value: "acta_retroalimentacion", label: "Acta de Retroalimentación" },
+  { value: "acta_ajuste_curricular", label: "Acta de Ajuste Curricular (EF2)" },
+  { value: "evidencia_difusion", label: "Evidencia de Difusión (EF3)" },
+  { value: "reglamento_normativa", label: "Reglamento / Normativa Institucional (EF5)" },
 ];
 
-function TabEvidencias({ asignatura }: { asignatura: Asignatura }) {
+function TabEvidencias({ asignatura, onEvidenceUploaded }: { asignatura: Asignatura; onEvidenceUploaded: () => void }) {
   const [lista, setLista] = useState<Evidencia[]>([]);
   const [selected, setSelected] = useState<Evidencia["tipo"] | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -545,9 +686,10 @@ function TabEvidencias({ asignatura }: { asignatura: Asignatura }) {
     const tipoDestino = selected ?? TIPOS.find((t) => !evidenciaDe(t.value))?.value ?? TIPOS[0].value;
     setUploading(true);
     try {
+      console.log("[TabEvidencias] asignatura actual:", asignatura);
       const form = new FormData();
       form.append("tipo", tipoDestino);
-      form.append("asignatura_id", String(asignatura.id));
+      form.append("asignatura", String(asignatura.id));
       form.append("archivo", file);
       await fetch(`${API_BASE}/api/evidencias/`, { method: "POST", body: form }).then(async (r) => {
         if (!r.ok) throw new Error((await r.json()).error || "Error al subir");
@@ -555,6 +697,7 @@ function TabEvidencias({ asignatura }: { asignatura: Asignatura }) {
       toast.success("Evidencia subida correctamente");
       setSelected(tipoDestino);
       load();
+      await onEvidenceUploaded();
     } catch (e: any) {
       toast.error(e.message);
     } finally {
@@ -672,7 +815,7 @@ const FICHA_11_2 = {
   name: "Seguimiento de Syllabus",
   code: "11.2",
   description: "Verifica el cumplimiento y seguimiento efectivo de los sílabos durante el período académico a través de registros documentados y actas de revisión periódica.",
-  formula: "(Asignaturas con seguimiento documentado / Total de asignaturas) × 100",
+  formula: "EF1×0.33 + EF2×0.27 + EF3×0.20 + EF4×0.13 + EF5×0.07",
   period: "Período académico vigente",
   purpose: "Asegurar que los docentes cumplen con la planificación del sílabo y que existen mecanismos formales de control y revisión del avance curricular en cada asignatura.",
   slots: [

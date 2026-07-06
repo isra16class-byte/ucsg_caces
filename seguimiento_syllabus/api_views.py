@@ -123,10 +123,10 @@ def api_evidencias(request):
         asignatura = get_object_or_404(Asignatura, id=asignatura_id)
         data = request.data.copy()
         data.pop('asignatura_id', None)
-        data.pop('asignatura', None)
+        data['asignatura'] = str(asignatura.id)
         serializer = EvidenciaSerializer(data=data, context={'request': request})
         if serializer.is_valid():
-            serializer.save(asignatura=asignatura)
+            serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
