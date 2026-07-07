@@ -16,6 +16,7 @@ from .views import (  # noqa: F401
     _calcular_ef_desde_csv,
     calcular_resultado_asignatura, calcular_resultado_general,
     obtener_materias_disponibles,
+    obtener_detalle_encuesta,
 )
 
 
@@ -232,6 +233,30 @@ def api_encuesta_resultados(request):
     if datos is None:
         return Response({'error': 'No se pudo conectar con Google Sheets.'}, status=503)
     return Response(datos)
+
+
+# ---------- Detalle de encuesta por asignatura (Entrega 3 - Exportación PDF) ----------
+
+@api_view(['GET'])
+def api_encuesta_detalle(request):
+    """
+    Devuelve, para las 23 preguntas de la encuesta de heteroevaluación, el
+    texto completo y el desglose de respuestas (conteo por opción),
+    filtrado por la materia de la asignatura indicada. Usado por el PDF
+    (secciones "Detalle de encuesta" y "Anexo") para no depender de texto
+    hardcodeado en el frontend.
+    """
+    asignatura_id = request.GET.get('asignatura')
+    if not asignatura_id:
+        return Response({'error': 'Se requiere el parámetro "asignatura".'}, status=status.HTTP_400_BAD_REQUEST)
+
+    asignatura = get_object_or_404(Asignatura, id=asignatura_id)
+    detalle = obtener_detalle_encuesta(materia=asignatura.nombre)
+    if detalle is None:
+        return Response({'error': 'No se pudo conectar con Google Sheets.'}, status=503)
+
+    detalle['asignatura'] = asignatura.id
+    return Response(detalle)
 
 
 # ---------- Ficha técnica ----------

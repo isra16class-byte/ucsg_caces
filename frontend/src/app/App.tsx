@@ -1,12 +1,14 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Upload, CheckCircle2, FileText, TableProperties,
-  ExternalLink, AlertCircle, BarChart2, Plus, ChevronLeft, FolderOpen, Download,
+  ExternalLink, AlertCircle, BarChart2, Plus, ChevronLeft, FolderOpen, Download, Loader2, Info,
 } from "lucide-react";
 import { toast, Toaster } from "sonner";
 import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer,
 } from "recharts";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
 import {
   Select,
   SelectContent,
@@ -84,6 +86,22 @@ interface ResultadoCohorte {
   respuestas: number;
   total_evidencias: number;
   asignaturas: { asignatura: Asignatura; resultado_final: number | null; escala: string | null; color_escala: string | null }[];
+}
+
+interface EncuestaDetallePregunta {
+  numero: number;
+  texto: string | null;
+  es_ef1: boolean;
+  es_ef4: boolean;
+  conteos: Record<string, number>;
+  total: number;
+}
+
+interface EncuestaDetalle {
+  asignatura: number;
+  materia_filtrada: string | null;
+  respuestas_totales_materia: number;
+  preguntas: EncuestaDetallePregunta[];
 }
 
 type TabId = "resultado" | "evidencias" | "ficha";
@@ -413,13 +431,15 @@ function TabResultado({
   const [showAddForm, setShowAddForm] = useState(false);
 
   return (
-    <div className="h-full flex px-6 py-4 gap-5 overflow-hidden" style={{ maxWidth: 1500, margin: "0 auto" }}>
+    <div className="h-full flex px-6 py-4 gap-5 overflow-hidden" style={{ maxWidth: 1152, margin: "0 auto" }}>
       {/* ── Izquierda: tarjeta de contexto + Valoración General + lista ── */}
       <div className="flex-1 flex flex-col gap-4 min-h-0 min-w-0">
         <div className="flex-shrink-0 bg-white rounded-2xl px-5 py-4 flex items-center justify-between gap-3" style={{ border: BORDER }}>
           <div className="min-w-0">
-            <p className="text-base font-bold truncate" style={{ color: NAVY_DARK }}>{cohorteActual?.nombre || "—"}</p>
-            <p className="text-sm mt-1" style={{ color: SLATE }}>Indicador 11.2 · Seguimiento de Syllabus · {periodoActual?.nombre || "PAO"}</p>
+            <p className="text-base font-bold truncate" style={{ color: NAVY_DARK }}>Desarrollo de Software</p>
+            <p className="text-sm mt-1" style={{ color: SLATE }}>
+              {cohorteActual?.nombre || "—"} · <span className="whitespace-nowrap">{periodoActual?.nombre || "PAO"}</span> · {asignaturas.length} {asignaturas.length === 1 ? "asignatura" : "asignaturas"}
+            </p>
           </div>
           {resumenCohorte ? <ValoracionGeneral resumen={resumenCohorte} /> : <ValoracionGeneralCargando />}
         </div>
@@ -486,7 +506,12 @@ function TabResultado({
       {/* ── Derecha: Resultados por EF (radar + grid + Exportar PDF) ── */}
       <div className="flex-1 min-h-0 min-w-0">
         {asignaturaActual ? (
-          <ResultadosPorEF asignatura={asignaturaActual} refreshToken={refreshToken} />
+          <ResultadosPorEF
+            asignatura={asignaturaActual}
+            refreshToken={refreshToken}
+            cohorteActual={cohorteActual}
+            periodoActual={periodoActual}
+          />
         ) : (
           <div className="h-full bg-white rounded-2xl flex items-center justify-center" style={{ border: BORDER }}>
             <p className="text-sm" style={{ color: "#9CA3AF" }}>Selecciona o crea una asignatura.</p>
@@ -514,12 +539,18 @@ function ValoracionGeneral({ resumen }: { resumen: ResultadoCohorte }) {
     resumen.ef5_estado === "sin_datos" ? "EF5" : null,
   ].filter(Boolean) as string[];
   return (
-    <div className="text-right flex-shrink-0">
-      <p className="text-xs font-bold uppercase tracking-widest mb-1" style={{ color: SLATE }}>Valoración General</p>
-      <p className="text-[11px] mb-2" style={{ color: SLATE }}>Estimación interna — el resultado oficial lo determina el Comité de Evaluación Externo de CACES</p>
+    <div className="text-right flex-shrink-0 max-w-[240px]">
+      <div className="flex items-center justify-end gap-1 mb-1">
+        <p className="text-xs font-bold uppercase tracking-widest" style={{ color: SLATE }}>Valoración General</p>
+        <span
+          title="Estimación interna — el resultado oficial lo determina el Comité de Evaluación Externo de CACES"
+          className="inline-flex cursor-help">
+          <Info size={13} style={{ color: SLATE }} />
+        </span>
+      </div>
       {resumen.estado_general === "incompleto" ? (
         <div className="inline-flex flex-col items-end gap-1">
-          <p className="text-xl sm:text-2xl font-bold leading-tight" style={{ color: "#64748B", fontFamily: SERIF }}>Incompleto — falta evidencia</p>
+          <p className="text-lg sm:text-xl font-bold leading-tight" style={{ color: "#64748B", fontFamily: SERIF }}>Incompleto</p>
           <p className="text-xs font-semibold" style={{ color: "#94A3B8" }}>{faltantes.length ? `Falta evidencia de ${faltantes.join(", ")}` : "Faltan evidencias documentales"}</p>
         </div>
       ) : (
@@ -563,13 +594,70 @@ function EfCell({ label, code, value, status }: { label: string; code: string; v
 }
 
 // ── Panel derecho completo: "Resultados por EF" (radar + grid + Exportar PDF) ──
-function ResultadosPorEF({ asignatura, refreshToken }: { asignatura: Asignatura; refreshToken: number }) {
+function ResultadosPorEF({
+  asignatura, refreshToken, cohorteActual, periodoActual,
+}: {
+  asignatura: Asignatura;
+  refreshToken: number;
+  cohorteActual: Cohorte | null;
+  periodoActual: PeriodoAcademico | null;
+}) {
   const [data, setData] = useState<Resultado | null>(null);
+  const [exportando, setExportando] = useState(false);
+  const radarRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setData(null);
     apiFetch(`/api/resultado/?asignatura=${asignatura.id}`).then(setData).catch(() => {});
   }, [asignatura.id, refreshToken]);
+
+  async function handleExportarPDF() {
+    if (!data) return;
+    setExportando(true);
+    try {
+      const [evidenciasRes, encuestaDetalle] = await Promise.all([
+        apiFetch(`/api/evidencias/?asignatura=${asignatura.id}`) as Promise<{ total: number; evidencias: Evidencia[] }>,
+        apiFetch(`/api/encuesta-detalle/?asignatura=${asignatura.id}`) as Promise<EncuestaDetalle>,
+      ]);
+
+      let radarImg: string | null = null;
+      let radarAspect = 1;
+      if (radarRef.current) {
+        const rect = radarRef.current.getBoundingClientRect();
+        // El contenedor ocupa el 100% del ancho del panel, pero recharts dibuja
+        // el círculo del radar centrado y acotado por la altura (más angosta).
+        // Se recorta solo ese cuadrado central para no capturar el espacio en
+        // blanco de los costados (que antes hacía ver el radar chico y ancho).
+        const lado = rect.height;
+        const offsetX = Math.max(0, (rect.width - lado) / 2);
+        const canvas = await html2canvas(radarRef.current, {
+          backgroundColor: "#ffffff",
+          scale: 2,
+          x: offsetX,
+          y: 0,
+          width: lado,
+          height: rect.height,
+        });
+        radarImg = canvas.toDataURL("image/png");
+        radarAspect = canvas.width / canvas.height;
+      }
+
+      generarPdfAsignatura({
+        asignatura,
+        cohorteActual,
+        periodoActual,
+        resultado: data,
+        radarImg,
+        radarAspect,
+        evidencias: evidenciasRes.evidencias,
+        encuestaDetalle,
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "No se pudo generar el PDF.");
+    } finally {
+      setExportando(false);
+    }
+  }
 
   if (!data) {
     return <div className="h-full bg-white rounded-2xl flex items-center justify-center" style={{ border: BORDER }}>
@@ -607,7 +695,7 @@ function ResultadosPorEF({ asignatura, refreshToken }: { asignatura: Asignatura;
       </div>
 
       {/* Radar */}
-      <div className="flex-shrink-0 px-5 pt-3" style={{ height: 185 }}>
+      <div ref={radarRef} className="flex-shrink-0 px-5 pt-3" style={{ height: 185, background: "#fff" }}>
         <ResponsiveContainer width="100%" height="100%">
           <RadarChart data={radarData} cx="50%" cy="50%" outerRadius="70%">
             <PolarGrid stroke="#E5E7EB" />
@@ -640,14 +728,267 @@ function ResultadosPorEF({ asignatura, refreshToken }: { asignatura: Asignatura;
       {/* Exportar PDF */}
       <div className="flex justify-end px-5 py-2.5 flex-shrink-0" style={{ borderTop: "1px solid rgba(27,58,107,0.07)" }}>
         <button
-          onClick={() => window.print()}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-xl font-bold transition-all hover:opacity-90 active:scale-95"
+          onClick={handleExportarPDF}
+          disabled={exportando}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-xl font-bold transition-all hover:opacity-90 active:scale-95 disabled:opacity-60"
           style={{ background: NAVY, color: "#fff", fontSize: 12 }}>
-          <Download size={12} /> Exportar PDF
+          {exportando
+            ? <><Loader2 size={12} className="animate-spin" /> Generando…</>
+            : <><Download size={12} /> Exportar PDF</>}
         </button>
       </div>
     </div>
   );
+}
+
+// ── Generación del PDF de la Entrega 3 (jsPDF + html2canvas) ──────────────
+// Nota de diseño: jsPDF no permite embeber "Libre Baskerville"/"DM Mono" sin
+// cargar los archivos de fuente como base64 (peso extra innecesario para
+// este caso), así que se usan las fuentes nativas de jsPDF más parecidas
+// ("times" como sustituto serif, "courier" como sustituto mono) manteniendo
+// la MISMA paleta de colores (NAVY/NAVY_DARK/SLATE) del resto de la app.
+
+const LABELS_EF: Record<"ef1" | "ef2" | "ef3" | "ef4" | "ef5", string> = {
+  ef1: "EF1 · Seguimiento contenidos",
+  ef2: "EF2 · Mejora micro currículo",
+  ef3: "EF3 · Proceso difundido",
+  ef4: "EF4 · Difusión syllabus EVA",
+  ef5: "EF5 · Normativa institucional",
+};
+
+const EVIDENCIA_PDF_LABELS: Record<string, string> = {
+  acta_ajuste_curricular: "EF2 · Acta de Ajuste Curricular",
+  evidencia_difusion: "EF3 · Evidencia de Difusión",
+  reglamento_normativa: "EF5 · Reglamento / Normativa Institucional",
+};
+
+const OPCIONES_LIKERT = ["Siempre", "Casi siempre", "Algunas veces", "Pocas veces", "Nunca"];
+
+function hexToRgb(hex: string): [number, number, number] {
+  const clean = hex.replace("#", "");
+  const bigint = parseInt(clean, 16);
+  return [(bigint >> 16) & 255, (bigint >> 8) & 255, bigint & 255];
+}
+
+function colorPorEscala(escala: string | null): [number, number, number] {
+  switch (escala) {
+    case "Satisfactorio": return [21, 128, 61];
+    case "Cuasi Satisfactorio": return [202, 138, 4];
+    case "Poco Satisfactorio": return [249, 115, 22];
+    case "Deficiente": return [239, 68, 68];
+    default: return [100, 116, 139];
+  }
+}
+
+function generarPdfAsignatura(params: {
+  asignatura: Asignatura;
+  cohorteActual: Cohorte | null;
+  periodoActual: PeriodoAcademico | null;
+  resultado: Resultado;
+  radarImg: string | null;
+  radarAspect: number;
+  evidencias: Evidencia[];
+  encuestaDetalle: EncuestaDetalle;
+}) {
+  const { asignatura, cohorteActual, periodoActual, resultado, radarImg, radarAspect, evidencias, encuestaDetalle } = params;
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const marginX = 15;
+  let y = 0;
+
+  const [navyR, navyG, navyB] = hexToRgb(NAVY);
+  const [navyDarkR, navyDarkG, navyDarkB] = hexToRgb(NAVY_DARK);
+  const [slateR, slateG, slateB] = hexToRgb(SLATE);
+  const [defR, defG, defB] = [239, 68, 68]; // mismo rojo que "Deficiente", reutilizado para "Sin evidencia"
+
+  function checkPageBreak(alturaNecesaria: number) {
+    if (y + alturaNecesaria > pageH - 15) {
+      doc.addPage();
+      y = 15;
+    }
+  }
+
+  // ── Encabezado ──
+  doc.setFillColor(navyR, navyG, navyB);
+  doc.rect(0, 0, pageW, 32, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("times", "bold");
+  doc.setFontSize(16);
+  doc.text(asignatura.nombre, marginX, 14);
+  doc.setFont("courier", "normal");
+  doc.setFontSize(9);
+  doc.text(`Docente: ${asignatura.docente || "—"}`, marginX, 21);
+  doc.text(
+    `Cohorte: ${cohorteActual?.nombre ?? "—"}   ·   PAO: ${periodoActual?.nombre ?? "—"}   ·   Generado: ${new Date().toLocaleString("es-EC")}`,
+    marginX, 27,
+  );
+  y = 40;
+
+  // ── Resumen general ──
+  doc.setFont("times", "bold");
+  doc.setFontSize(12);
+  doc.setTextColor(navyDarkR, navyDarkG, navyDarkB);
+  doc.text("Resumen general", marginX, y);
+  y += 4;
+
+  const [escR, escG, escB] = colorPorEscala(resultado.escala);
+  doc.setFillColor(escR, escG, escB);
+  doc.roundedRect(marginX, y, 55, 16, 2, 2, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("courier", "bold");
+  doc.setFontSize(13);
+  const textoResultado = resultado.resultado_final === null ? "Incompleto" : `${resultado.resultado_final}%`;
+  doc.text(textoResultado, marginX + 27.5, y + 7, { align: "center" });
+  doc.setFontSize(8);
+  doc.text(resultado.escala ?? "Falta evidencia", marginX + 27.5, y + 12.5, { align: "center" });
+
+  let alturaBloqueRadar = 22; // fallback si no hay imagen (mismo valor que antes)
+  if (radarImg) {
+    const imgW = 52;
+    const imgH = imgW / radarAspect;
+    doc.addImage(radarImg, "PNG", pageW - marginX - imgW, y - 3, imgW, imgH);
+    alturaBloqueRadar = Math.max(22, imgH + 4);
+  }
+  y += alturaBloqueRadar;
+
+  const efRows: { label: string; valor: number | null; estado: "ok" | "sin_datos" }[] = [
+    { label: LABELS_EF.ef1, valor: resultado.ef1, estado: resultado.ef1_estado },
+    { label: LABELS_EF.ef2, valor: resultado.ef2, estado: resultado.ef2_estado },
+    { label: LABELS_EF.ef3, valor: resultado.ef3, estado: resultado.ef3_estado },
+    { label: LABELS_EF.ef4, valor: resultado.ef4, estado: resultado.ef4_estado },
+    { label: LABELS_EF.ef5, valor: resultado.ef5, estado: resultado.ef5_estado },
+  ];
+  doc.setFontSize(9);
+  efRows.forEach((row) => {
+    doc.setFont("courier", "normal");
+    doc.setTextColor(slateR, slateG, slateB);
+    doc.text(row.label, marginX, y);
+    doc.setFont("courier", "bold");
+    doc.setTextColor(navyDarkR, navyDarkG, navyDarkB);
+    const texto = row.estado === "sin_datos" || row.valor === null ? "Sin datos" : `${row.valor}%`;
+    doc.text(texto, marginX + 95, y);
+    y += 6;
+  });
+  y += 4;
+
+  // ── Detalle de encuesta (EF1 y EF4) ──
+  checkPageBreak(20);
+  doc.setFont("times", "bold");
+  doc.setFontSize(12);
+  doc.setTextColor(navyDarkR, navyDarkG, navyDarkB);
+  doc.text("Detalle de encuesta — EF1 y EF4", marginX, y);
+  y += 3;
+  doc.setFont("courier", "normal");
+  doc.setFontSize(7.5);
+  doc.setTextColor(slateR, slateG, slateB);
+  doc.text(`Respuestas consideradas para esta asignatura: ${encuestaDetalle.respuestas_totales_materia}`, marginX, y);
+  y += 7;
+
+  const preguntasEF = encuestaDetalle.preguntas.filter((p) => p.es_ef1 || p.es_ef4);
+  preguntasEF.forEach((p) => {
+    checkPageBreak(26);
+    doc.setFont("courier", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(navyR, navyG, navyB);
+    doc.text(`P${p.numero} (${p.es_ef1 ? "EF1" : "EF4"})`, marginX, y);
+    y += 5;
+
+    doc.setFont("times", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(navyDarkR, navyDarkG, navyDarkB);
+    const lineasTexto = doc.splitTextToSize(
+      p.texto ?? "(pregunta no encontrada en la encuesta actual)",
+      pageW - marginX * 2,
+    );
+    doc.text(lineasTexto, marginX, y);
+    y += lineasTexto.length * 4.2 + 2;
+
+    doc.setFont("courier", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(slateR, slateG, slateB);
+    const resumenConteo = p.total > 0
+      ? OPCIONES_LIKERT.map((op) => `${op}: ${p.conteos[op] ?? 0} (${Math.round(((p.conteos[op] ?? 0) / p.total) * 100)}%)`).join("   ·   ")
+      : "Sin respuestas para esta materia";
+    const lineasConteo = doc.splitTextToSize(resumenConteo, pageW - marginX * 2);
+    doc.text(lineasConteo, marginX, y);
+    y += lineasConteo.length * 4 + 6;
+  });
+
+  // ── Evidencia documental (EF2, EF3, EF5) ──
+  checkPageBreak(20);
+  doc.setFont("times", "bold");
+  doc.setFontSize(12);
+  doc.setTextColor(navyDarkR, navyDarkG, navyDarkB);
+  doc.text("Evidencia documental — EF2, EF3 y EF5", marginX, y);
+  y += 8;
+
+  (Object.keys(EVIDENCIA_PDF_LABELS) as (keyof typeof EVIDENCIA_PDF_LABELS)[]).forEach((tipo) => {
+    checkPageBreak(15);
+    const ev = evidencias.find((e) => e.tipo === tipo && e.vigente);
+    doc.setFont("courier", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(navyR, navyG, navyB);
+    doc.text(EVIDENCIA_PDF_LABELS[tipo], marginX, y);
+    y += 5;
+    doc.setFont("times", "normal");
+    doc.setFontSize(9);
+    if (ev) {
+      doc.setTextColor(navyDarkR, navyDarkG, navyDarkB);
+      doc.text(`Archivo: ${ev.archivo_nombre ?? "—"}`, marginX, y);
+      y += 4.5;
+      doc.text(
+        `Subido: ${new Date(ev.fecha_subida).toLocaleDateString("es-EC")}   ·   Por: ${ev.subido_por || "—"}`,
+        marginX, y,
+      );
+      y += 8;
+    } else {
+      doc.setTextColor(defR, defG, defB);
+      doc.text("Sin evidencia subida", marginX, y);
+      y += 8;
+    }
+  });
+
+  // ── Anexo: las 23 preguntas completas ──
+  doc.addPage();
+  y = 15;
+  doc.setFont("times", "bold");
+  doc.setFontSize(12);
+  doc.setTextColor(navyDarkR, navyDarkG, navyDarkB);
+  doc.text("Anexo — Las 23 preguntas de la encuesta de heteroevaluación", marginX, y);
+  y += 8;
+
+  encuestaDetalle.preguntas.forEach((p) => {
+    checkPageBreak(20);
+    doc.setFont("courier", "bold");
+    doc.setFontSize(8.5);
+    doc.setTextColor(navyR, navyG, navyB);
+    const marcador = p.es_ef1 ? " (EF1)" : p.es_ef4 ? " (EF4)" : "";
+    doc.text(`P${p.numero}${marcador}`, marginX, y);
+    y += 4;
+
+    doc.setFont("times", "normal");
+    doc.setFontSize(8.5);
+    doc.setTextColor(navyDarkR, navyDarkG, navyDarkB);
+    const lineasTexto = doc.splitTextToSize(
+      p.texto ?? "(pregunta no encontrada en la encuesta actual)",
+      pageW - marginX * 2,
+    );
+    doc.text(lineasTexto, marginX, y);
+    y += lineasTexto.length * 3.8 + 1;
+
+    doc.setFont("courier", "normal");
+    doc.setFontSize(7.5);
+    doc.setTextColor(slateR, slateG, slateB);
+    const resumenConteo = p.total > 0
+      ? OPCIONES_LIKERT.map((op) => `${op}: ${p.conteos[op] ?? 0}`).join("  ·  ")
+      : "Sin respuestas para esta materia";
+    const lineasConteo = doc.splitTextToSize(resumenConteo, pageW - marginX * 2);
+    doc.text(lineasConteo, marginX, y);
+    y += lineasConteo.length * 3.6 + 4;
+  });
+
+  doc.save(`indicador_11.2_${asignatura.nombre.replace(/\s+/g, "_")}.pdf`);
 }
 
 // ── Tab: Evidencias (diseño original de Figma: fuentes + vista previa) ────

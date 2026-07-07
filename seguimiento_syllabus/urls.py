@@ -12,5 +12,6 @@ urlpatterns = [
     path('api/resultado-cohorte/', api_views.api_resultado_cohorte, name='api_resultado_cohorte'),
     path('api/encuesta/', api_views.api_encuesta, name='api_encuesta'),
     path('api/encuesta/resultados/', api_views.api_encuesta_resultados, name='api_encuesta_resultados'),
+    path('api/encuesta-detalle/', api_views.api_encuesta_detalle, name='api_encuesta_detalle'),
     path('api/ficha-tecnica/', api_views.api_ficha_tecnica, name='api_ficha_tecnica'),
 ]

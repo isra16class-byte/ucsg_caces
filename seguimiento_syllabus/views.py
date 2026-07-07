@@ -13,6 +13,20 @@ def _buscar_columna(preguntas, numero):
     return [p for p in preguntas if patron.search(p)]
 
 
+def _texto_pregunta(header, numero):
+    """
+    Extrae el texto legible de una pregunta a partir del encabezado real de
+    columna del CSV (que trae el formato "...[P5. Informó al inicio...]").
+    Se usa para el detalle de encuesta del PDF (Entrega 3), para no
+    hardcodear el texto de las 23 preguntas en el frontend: se toma siempre
+    del propio CSV, misma fuente que ya usa el cálculo de EF1/EF4.
+    """
+    m = re.search(rf'\[P{numero}\.?\s*(.*?)\]', header, re.IGNORECASE)
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+    return header.strip()
+
+
 def _descargar_csv():
     req = urllib.request.Request(URL_CSV, headers={'User-Agent': 'Mozilla/5.0'})
     response = urllib.request.urlopen(req, timeout=10)
@@ -115,6 +129,82 @@ def _calcular_ef_desde_csv(materia=None):
         'ef_puntaje': ef_puntaje,
         'respuestas': total_filas,
         'promedio_general': round(sum(promedios.values()) / len(promedios), 1) if promedios else 0,
+    }
+
+
+def obtener_detalle_encuesta(materia=None):
+    """
+    Devuelve, para cada una de las 23 preguntas de la encuesta de
+    heteroevaluación, su texto completo y el desglose de respuestas (conteo
+    por cada opción del Likert), filtrando por materia si se indica.
+
+    Reutiliza _descargar_csv/_detectar_indice_materia/_buscar_columna, la
+    MISMA lógica que ya usa _calcular_ef_desde_csv para EF1/EF4 — así el
+    desglose que se muestra en el PDF (Entrega 3) queda garantizado
+    consistente con el % que ya se ve en pantalla, en vez de reimplementar
+    el matching de columnas por separado.
+    """
+    try:
+        lines = _descargar_csv()
+    except Exception:
+        return None
+
+    reader = csv.reader(lines)
+    headers = next(reader)
+    idx_materia = _detectar_indice_materia(headers)
+    preguntas = headers[3:]
+
+    opciones = list(PUNTAJE_MAP.keys())
+    conteos = {p: {op: 0 for op in opciones} for p in preguntas}
+    total_filas_materia = 0
+
+    for row in reader:
+        if len(row) < 4:
+            continue
+        if materia and idx_materia is not None:
+            if len(row) <= idx_materia or row[idx_materia].strip().lower() != materia.strip().lower():
+                continue
+        total_filas_materia += 1
+        for i, valor in enumerate(row[3:]):
+            if i < len(preguntas):
+                valor = valor.strip()
+                if valor in opciones:
+                    conteos[preguntas[i]][valor] += 1
+
+    ef1_cols = set(_buscar_columna(preguntas, 5) + _buscar_columna(preguntas, 8) + _buscar_columna(preguntas, 13))
+    ef4_cols = set(_buscar_columna(preguntas, 6))
+
+    preguntas_detalle = []
+    for numero in range(1, 24):
+        cols = _buscar_columna(preguntas, numero)
+        if not cols:
+            # No se encontró columna para este número de pregunta en el CSV
+            # actual (ej. cambió el formulario). Se reporta igual, vacío, en
+            # vez de omitirla, para no romper el anexo de 23 preguntas.
+            preguntas_detalle.append({
+                'numero': numero,
+                'texto': None,
+                'es_ef1': False,
+                'es_ef4': False,
+                'conteos': {op: 0 for op in opciones},
+                'total': 0,
+            })
+            continue
+
+        col = cols[0]  # una sola columna por número de pregunta en el formulario real
+        preguntas_detalle.append({
+            'numero': numero,
+            'texto': _texto_pregunta(col, numero),
+            'es_ef1': col in ef1_cols,
+            'es_ef4': col in ef4_cols,
+            'conteos': conteos[col],
+            'total': sum(conteos[col].values()),
+        })
+
+    return {
+        'materia_filtrada': materia,
+        'respuestas_totales_materia': total_filas_materia,
+        'preguntas': preguntas_detalle,
     }
 
 
