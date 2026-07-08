@@ -45,7 +45,23 @@ class Evidencia(models.Model):
         ('evidencia_difusion', 'Evidencia de Difusión (EF3)'),
         ('reglamento_normativa', 'Reglamento / Normativa Institucional (EF5)'),
     ]
-    asignatura = models.ForeignKey(Asignatura, on_delete=models.CASCADE, related_name='evidencias')
+
+    # EF2, EF3 y EF5 son evidencia INSTITUCIONAL del PAO (un reglamento o
+    # un acta de ajuste curricular es el mismo documento para todas las
+    # asignaturas de un periodo académico) — se suben UNA sola vez por PAO
+    # y aplican a todas sus asignaturas. malla_curricular/syllabus/
+    # acta_retroalimentacion sí varían por asignatura (cada materia tiene
+    # su propio syllabus), se mantienen como estaban.
+    TIPOS_POR_PERIODO = {'acta_ajuste_curricular', 'evidencia_difusion', 'reglamento_normativa'}
+
+    asignatura = models.ForeignKey(
+        Asignatura, on_delete=models.CASCADE, related_name='evidencias',
+        null=True, blank=True,
+    )
+    periodo_academico = models.ForeignKey(
+        PeriodoAcademico, on_delete=models.CASCADE, related_name='evidencias',
+        null=True, blank=True,
+    )
     tipo = models.CharField(max_length=30, choices=TIPO_CHOICES)
     archivo = models.FileField(
         upload_to='evidencias/',
@@ -56,4 +72,5 @@ class Evidencia(models.Model):
     vigente = models.BooleanField(default=True)
 
     def __str__(self):
-        return f"{self.tipo} - {self.asignatura}"
+        contexto = self.periodo_academico if self.periodo_academico_id else self.asignatura
+        return f"{self.tipo} - {contexto}"

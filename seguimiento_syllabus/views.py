@@ -208,14 +208,19 @@ def obtener_detalle_encuesta(materia=None):
     }
 
 
-def _calcular_resultado_generico(evidencias_qs, materia_filtro):
+def _calcular_resultado_generico(evidencias_qs, materia_filtro, periodo=None):
     """
     Núcleo del cálculo EF1-EF5, parametrizado por:
-    - evidencias_qs: queryset de Evidencia a considerar (de una asignatura,
-      o de TODA la cohorte).
+    - evidencias_qs: queryset de Evidencia POR ASIGNATURA a considerar (solo
+      cubre malla_curricular/syllabus/acta_retroalimentacion — evidencia que
+      sí varía por materia).
     - materia_filtro: nombre de materia para filtrar la encuesta (una
       asignatura), o None para agregarla completa (evaluación general
       de la cohorte, tal como la evalúa CACES).
+    - periodo: PeriodoAcademico del que se toma la evidencia INSTITUCIONAL
+      (EF2/EF3/EF5 — acta_ajuste_curricular, evidencia_difusion,
+      reglamento_normativa), que es la misma para todas las asignaturas de
+      ese PAO. Si es None, EF2/EF3/EF5 quedan en "sin_datos".
     """
     evidencias_info = {
         'malla_curricular': {'subida': False, 'label': 'Malla Curricular'},
@@ -225,11 +230,21 @@ def _calcular_resultado_generico(evidencias_qs, materia_filtro):
         'evidencia_difusion': {'subida': False, 'label': 'Evidencia de Difusión (EF3)'},
         'reglamento_normativa': {'subida': False, 'label': 'Reglamento / Normativa Institucional (EF5)'},
     }
-    tipos_vigentes = set(
-        evidencias_qs.filter(vigente=True).values_list('tipo', flat=True)
+    tipos_asignatura_vigentes = set(
+        evidencias_qs.filter(vigente=True)
+        .exclude(tipo__in=Evidencia.TIPOS_POR_PERIODO)
+        .values_list('tipo', flat=True)
     )
-    for tipo in tipos_vigentes:
+    for tipo in tipos_asignatura_vigentes:
         if tipo in evidencias_info:
+            evidencias_info[tipo]['subida'] = True
+
+    if periodo is not None:
+        tipos_periodo_vigentes = set(
+            Evidencia.objects.filter(periodo_academico=periodo, vigente=True, tipo__in=Evidencia.TIPOS_POR_PERIODO)
+            .values_list('tipo', flat=True)
+        )
+        for tipo in tipos_periodo_vigentes:
             evidencias_info[tipo]['subida'] = True
 
     tiene_ef2 = evidencias_info['acta_ajuste_curricular']['subida']
@@ -327,11 +342,14 @@ def _calcular_resultado_generico(evidencias_qs, materia_filtro):
 
 def calcular_resultado_asignatura(asignatura):
     """
-    Calcula el resultado EF1-EF5 para UNA asignatura: solo sus evidencias,
-    y la encuesta filtrada por su nombre de materia.
+    Calcula el resultado EF1-EF5 para UNA asignatura: sus evidencias propias
+    (malla/syllabus/acta_retro) + la evidencia institucional de su PAO
+    (EF2/EF3/EF5), y la encuesta filtrada por su nombre de materia.
     """
     evidencias_qs = Evidencia.objects.filter(asignatura=asignatura)
-    return _calcular_resultado_generico(evidencias_qs, materia_filtro=asignatura.nombre)
+    return _calcular_resultado_generico(
+        evidencias_qs, materia_filtro=asignatura.nombre, periodo=asignatura.periodo_academico,
+    )
 
 
 def calcular_resultado_general(cohorte, periodo=None):
@@ -346,7 +364,15 @@ def calcular_resultado_general(cohorte, periodo=None):
         asignaturas_qs = asignaturas_qs.filter(periodo_academico=periodo)
 
     resultados = [calcular_resultado_asignatura(asignatura) for asignatura in asignaturas_qs]
-    evidencias_qs = Evidencia.objects.filter(asignatura__in=asignaturas_qs, vigente=True)
+
+    # Evidencia propia de asignatura (malla/syllabus/acta_retro) + evidencia
+    # institucional de los PAO involucrados (EF2/EF3/EF5, ya no depende de
+    # la asignatura sino del periodo académico).
+    asignatura_evidencias_qs = Evidencia.objects.filter(asignatura__in=asignaturas_qs, vigente=True)
+    periodos_ids = list(asignaturas_qs.values_list('periodo_academico_id', flat=True).distinct())
+    periodo_evidencias_qs = Evidencia.objects.filter(
+        periodo_academico_id__in=periodos_ids, vigente=True, tipo__in=Evidencia.TIPOS_POR_PERIODO,
+    )
 
     agregados = {}
     estados = {}
@@ -364,8 +390,9 @@ def calcular_resultado_general(cohorte, periodo=None):
     ) if any(resultado['promedio_general'] is not None for resultado in resultados) else 0
 
     total_asignaturas = asignaturas_qs.count()
-    total_evidencias = evidencias_qs.count()
-    pct_evidencias = round(total_evidencias / (total_asignaturas * 3) * 100, 1) if total_asignaturas > 0 else 0
+    total_evidencias = asignatura_evidencias_qs.exclude(tipo__in=Evidencia.TIPOS_POR_PERIODO).count() + periodo_evidencias_qs.count()
+    total_posible = (total_asignaturas * 3) + (len(periodos_ids) * 3)
+    pct_evidencias = round(total_evidencias / total_posible * 100, 1) if total_posible > 0 else 0
 
     if all(estados[f'ef{i}_estado'] == 'ok' for i in range(1, 6)):
         ef_puntaje = round(
@@ -402,12 +429,12 @@ def calcular_resultado_general(cohorte, periodo=None):
         color_escala = None
 
     evidencias_info = {
-        'malla_curricular': {'subida': evidencias_qs.filter(tipo='malla_curricular').exists(), 'label': 'Malla Curricular'},
-        'syllabus': {'subida': evidencias_qs.filter(tipo='syllabus').exists(), 'label': 'Syllabus'},
-        'acta_retroalimentacion': {'subida': evidencias_qs.filter(tipo='acta_retroalimentacion').exists(), 'label': 'Acta de Retroalimentación'},
-        'acta_ajuste_curricular': {'subida': evidencias_qs.filter(tipo='acta_ajuste_curricular').exists(), 'label': 'Acta de Ajuste Curricular (EF2)'},
-        'evidencia_difusion': {'subida': evidencias_qs.filter(tipo='evidencia_difusion').exists(), 'label': 'Evidencia de Difusión (EF3)'},
-        'reglamento_normativa': {'subida': evidencias_qs.filter(tipo='reglamento_normativa').exists(), 'label': 'Reglamento / Normativa Institucional (EF5)'},
+        'malla_curricular': {'subida': asignatura_evidencias_qs.filter(tipo='malla_curricular').exists(), 'label': 'Malla Curricular'},
+        'syllabus': {'subida': asignatura_evidencias_qs.filter(tipo='syllabus').exists(), 'label': 'Syllabus'},
+        'acta_retroalimentacion': {'subida': asignatura_evidencias_qs.filter(tipo='acta_retroalimentacion').exists(), 'label': 'Acta de Retroalimentación'},
+        'acta_ajuste_curricular': {'subida': periodo_evidencias_qs.filter(tipo='acta_ajuste_curricular').exists(), 'label': 'Acta de Ajuste Curricular (EF2)'},
+        'evidencia_difusion': {'subida': periodo_evidencias_qs.filter(tipo='evidencia_difusion').exists(), 'label': 'Evidencia de Difusión (EF3)'},
+        'reglamento_normativa': {'subida': periodo_evidencias_qs.filter(tipo='reglamento_normativa').exists(), 'label': 'Reglamento / Normativa Institucional (EF5)'},
     }
 
     return {

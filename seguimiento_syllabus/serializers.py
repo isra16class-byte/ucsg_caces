@@ -28,12 +28,41 @@ class EvidenciaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Evidencia
         fields = [
-            'id', 'asignatura', 'tipo', 'tipo_display',
+            'id', 'asignatura', 'periodo_academico', 'tipo', 'tipo_display',
             'archivo', 'archivo_url', 'archivo_nombre', 'subido_por', 'fecha_subida', 'vigente',
         ]
         extra_kwargs = {
             'archivo': {'write_only': True},
         }
+
+    def validate(self, data):
+        tipo = data.get('tipo')
+        asignatura = data.get('asignatura')
+        periodo = data.get('periodo_academico')
+
+        if tipo in Evidencia.TIPOS_POR_PERIODO:
+            # EF2/EF3/EF5: evidencia institucional del PAO, no de una
+            # asignatura puntual.
+            if not periodo:
+                raise serializers.ValidationError({
+                    'periodo_academico': 'Este tipo de evidencia es institucional del PAO: se requiere "periodo_academico".',
+                })
+            if asignatura:
+                raise serializers.ValidationError({
+                    'asignatura': 'Este tipo de evidencia no debe asociarse a una asignatura específica, sino al PAO completo.',
+                })
+        else:
+            # malla_curricular / syllabus / acta_retroalimentacion: sí
+            # varían por asignatura.
+            if not asignatura:
+                raise serializers.ValidationError({
+                    'asignatura': 'Este tipo de evidencia requiere "asignatura".',
+                })
+            if periodo:
+                raise serializers.ValidationError({
+                    'periodo_academico': 'Este tipo de evidencia no debe asociarse directamente a un periodo.',
+                })
+        return data
 
     def get_archivo_url(self, obj):
         request = self.context.get('request')

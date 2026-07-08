@@ -3,6 +3,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
+from django.db import models
 
 from .models import Cohorte, PeriodoAcademico, Asignatura, Evidencia
 from .serializers import (
@@ -113,18 +114,42 @@ def api_materias_encuesta(request):
 @parser_classes([MultiPartParser, FormParser])
 def api_evidencias(request):
     if request.method == 'POST':
-        asignatura_id = request.data.get('asignatura_id') or request.data.get('asignatura')
-
-        if not asignatura_id:
-            return Response(
-                {'error': 'Se requiere "asignatura_id".'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        asignatura = get_object_or_404(Asignatura, id=asignatura_id)
+        tipo = request.data.get('tipo')
         data = request.data.copy()
-        data.pop('asignatura_id', None)
-        data['asignatura'] = str(asignatura.id)
+
+        if tipo in Evidencia.TIPOS_POR_PERIODO:
+            # EF2/EF3/EF5: evidencia institucional del PAO. El frontend
+            # manda "periodo_academico" (o "asignatura", desde la cual
+            # derivamos el PAO — así no obligamos a tocar cada llamada del
+            # frontend si en algún flujo solo tiene a mano la asignatura).
+            periodo_id = data.get('periodo_academico') or data.get('periodo_id')
+            if not periodo_id:
+                asignatura_id = data.get('asignatura_id') or data.get('asignatura')
+                if asignatura_id:
+                    periodo_id = get_object_or_404(Asignatura, id=asignatura_id).periodo_academico_id
+            if not periodo_id:
+                return Response(
+                    {'error': 'Este tipo de evidencia es institucional del PAO: se requiere "periodo_academico" (o "asignatura" para derivarlo).'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            periodo = get_object_or_404(PeriodoAcademico, id=periodo_id)
+            data['periodo_academico'] = str(periodo.id)
+            data.pop('asignatura', None)
+            data.pop('asignatura_id', None)
+            data.pop('periodo_id', None)
+        else:
+            asignatura_id = data.get('asignatura_id') or data.get('asignatura')
+            if not asignatura_id:
+                return Response(
+                    {'error': 'Se requiere "asignatura_id".'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            asignatura = get_object_or_404(Asignatura, id=asignatura_id)
+            data['asignatura'] = str(asignatura.id)
+            data.pop('asignatura_id', None)
+            data.pop('periodo_academico', None)
+            data.pop('periodo_id', None)
+
         serializer = EvidenciaSerializer(data=data, context={'request': request})
         if serializer.is_valid():
             # IMPORTANTE: forzamos vigente=True explícitamente en save().
@@ -144,9 +169,21 @@ def api_evidencias(request):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     asignatura_id = request.GET.get('asignatura')
+    periodo_id = request.GET.get('periodo')
     evidencias_qs = Evidencia.objects.all()
+
     if asignatura_id:
-        evidencias_qs = evidencias_qs.filter(asignatura_id=asignatura_id)
+        # Devolvemos la unión: evidencia propia de la asignatura (EF1
+        # general, malla/syllabus/acta_retro) + evidencia institucional
+        # del PAO al que pertenece (EF2/EF3/EF5) — así la pestaña
+        # Evidencias muestra ambas sin que el frontend tenga que pedir 2
+        # veces.
+        asignatura = get_object_or_404(Asignatura, id=asignatura_id)
+        evidencias_qs = evidencias_qs.filter(
+            models.Q(asignatura_id=asignatura_id) | models.Q(periodo_academico_id=asignatura.periodo_academico_id)
+        )
+    elif periodo_id:
+        evidencias_qs = evidencias_qs.filter(periodo_academico_id=periodo_id)
 
     return Response({
         'total': evidencias_qs.count(),

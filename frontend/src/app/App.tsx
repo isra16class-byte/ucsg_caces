@@ -38,7 +38,8 @@ interface Asignatura { id: number; periodo_academico: number; nombre: string; do
 
 interface Evidencia {
   id: number;
-  asignatura: number;
+  asignatura: number | null;
+  periodo_academico: number | null;
   tipo: "malla_curricular" | "syllabus" | "acta_retroalimentacion" | "acta_ajuste_curricular" | "evidencia_difusion" | "reglamento_normativa";
   tipo_display: string;
   archivo_url: string;
@@ -1007,8 +1008,17 @@ function TabEvidencias({ asignatura, onEvidenceUploaded }: { asignatura: Asignat
   const [uploading, setUploading] = useState(false);
   const fileInputRef = { current: null as HTMLInputElement | null };
 
+  // EF2/EF3/EF5 son evidencia INSTITUCIONAL del PAO (el mismo documento
+  // aplica a todas las asignaturas de ese periodo académico) — se suben
+  // una sola vez por PAO, no por asignatura. malla_curricular/syllabus/
+  // acta_retroalimentacion sí son por asignatura.
+  const TIPOS_POR_PERIODO = new Set(["acta_ajuste_curricular", "evidencia_difusion", "reglamento_normativa"]);
+
   const load = useCallback(async () => {
     try {
+      // El backend ya devuelve la unión (evidencia propia de la asignatura
+      // + evidencia institucional del PAO al que pertenece) cuando se
+      // consulta por "asignatura".
       const data = await apiFetch(`/api/evidencias/?asignatura=${asignatura.id}`);
       setLista(data.evidencias);
     } catch (e: any) {
@@ -1025,17 +1035,25 @@ function TabEvidencias({ asignatura, onEvidenceUploaded }: { asignatura: Asignat
 
   async function handleFileChosen(file: File) {
     const tipoDestino = selected ?? TIPOS.find((t) => !evidenciaDe(t.value))?.value ?? TIPOS[0].value;
+    const esInstitucional = TIPOS_POR_PERIODO.has(tipoDestino);
     setUploading(true);
     try {
-      console.log("[TabEvidencias] asignatura actual:", asignatura);
       const form = new FormData();
       form.append("tipo", tipoDestino);
+      // El backend deriva el PAO automáticamente a partir de la asignatura
+      // cuando el tipo es institucional (EF2/EF3/EF5) — no hace falta que
+      // el frontend distinga el flujo, solo mandamos la asignatura actual
+      // como siempre.
       form.append("asignatura", String(asignatura.id));
       form.append("archivo", file);
       await fetch(`${API_BASE}/api/evidencias/`, { method: "POST", body: form }).then(async (r) => {
         if (!r.ok) throw new Error((await r.json()).error || "Error al subir");
       });
-      toast.success("Evidencia subida correctamente");
+      toast.success(
+        esInstitucional
+          ? "Evidencia subida — aplica a todas las asignaturas de este PAO"
+          : "Evidencia subida correctamente"
+      );
       setSelected(tipoDestino);
       load();
       await onEvidenceUploaded();
@@ -1075,7 +1093,9 @@ function TabEvidencias({ asignatura, onEvidenceUploaded }: { asignatura: Asignat
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-semibold truncate" style={{ color: active ? NAVY : NAVY_DARK }}>{t.label}</p>
-                    <p className="text-xs" style={{ color: "#9CA3AF" }}>Fuente {i + 1}</p>
+                    <p className="text-xs" style={{ color: "#9CA3AF" }}>
+                      {TIPOS_POR_PERIODO.has(t.value) ? "Aplica a todo el PAO" : `Fuente ${i + 1}`}
+                    </p>
                   </div>
                   <span className="text-xs px-1.5 py-0.5 rounded-full font-semibold flex-shrink-0 whitespace-nowrap"
                     style={ev ? { background: "#DCFCE7", color: "#16A34A" } : { background: "#FEF9C3", color: "#CA8A04" }}>
