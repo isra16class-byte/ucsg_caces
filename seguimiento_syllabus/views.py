@@ -278,21 +278,26 @@ def _calcular_resultado_generico(evidencias_qs, materia_filtro, periodo=None):
     ef3_doc = 1.0 if tiene_ef3 else None
     ef5 = 1.0 if tiene_ef5 else None
 
-    # La valoración/resultado AGREGADO (el % final del indicador) sigue
-    # exigiendo que los 5 EF estén completos — eso sí sigue siendo "todo o
-    # nada", tal como está documentado y decidido para el indicador general.
-    if ef_disponible and ef2_estado == 'ok' and ef3_estado == 'ok' and ef5_estado == 'ok':
-        ef_puntaje = round(ef1 * 0.33 + ef2 * 0.27 + ef3_doc * 0.20 + ef4 * 0.13 + ef5 * 0.07, 4)
-        valoracion_general = round(ef_puntaje * 100, 1)
-        resultado_final = valoracion_general
-        estado_general = 'completo'
-        fuente_resultado = 'combinado'
-    else:
-        ef_puntaje = None
-        valoracion_general = None
-        resultado_final = None
-        estado_general = 'incompleto'
-        fuente_resultado = 'incompleto'
+    # El % agregado (resultado_final) ahora SIEMPRE se calcula, tratando
+    # cada EF que falte como 0 en la suma ponderada — así una asignatura a
+    # medio completar (ej. solo EF2/EF3/EF5 institucional) ya muestra un %
+    # real de avance en vez de "Incompleto", sin inventar valor para lo que
+    # falta (el "Sin datos" de cada EF puntual arriba se mantiene intacto
+    # para saber exactamente qué falta). "estado_general" pasa a ser solo
+    # informativo (si los 5 EF están completos o no), ya no bloquea el %.
+    ef1_val = ef1 if ef1 is not None else 0.0
+    ef2_val = ef2 if ef2 is not None else 0.0
+    ef3_val = ef3_doc if ef3_doc is not None else 0.0
+    ef4_val = ef4 if ef4 is not None else 0.0
+    ef5_val = ef5 if ef5 is not None else 0.0
+
+    ef_puntaje = round(ef1_val * 0.33 + ef2_val * 0.27 + ef3_val * 0.20 + ef4_val * 0.13 + ef5_val * 0.07, 4)
+    valoracion_general = round(ef_puntaje * 100, 1)
+    resultado_final = valoracion_general
+
+    todos_completos = ef_disponible and ef2_estado == 'ok' and ef3_estado == 'ok' and ef5_estado == 'ok'
+    estado_general = 'completo' if todos_completos else 'parcial'
+    fuente_resultado = 'combinado' if todos_completos else 'parcial'
 
     if valoracion_general is not None and valoracion_general >= 75:
         escala = 'Satisfactorio'
@@ -374,12 +379,22 @@ def calcular_resultado_general(cohorte, periodo=None):
         periodo_academico_id__in=periodos_ids, vigente=True, tipo__in=Evidencia.TIPOS_POR_PERIODO,
     )
 
+    # IMPORTANTE: antes esto promediaba cada EF solo entre las asignaturas
+    # que SÍ tenían dato, ignorando las que no — eso hacía que, con 1 sola
+    # asignatura completa de 8, el general mostrara el resultado de ESA UNA
+    # como si fuera el de todo el PAO (ej. 96% aunque las otras 7 no
+    # tuvieran nada). Ahora se divide siempre entre el TOTAL de asignaturas
+    # del PAO, tratando las que no tienen dato como 0 — así el general
+    # queda diluido correctamente según cuántas asignaturas están
+    # realmente completas.
     agregados = {}
     estados = {}
+    total_resultados = len(resultados)
     for ef in ['ef1', 'ef2', 'ef3', 'ef4', 'ef5']:
-        valores = [resultado[ef] for resultado in resultados if resultado[ef] is not None]
-        agregados[ef] = round(sum(valores) / len(valores), 1) if valores else None
-        estados[f'{ef}_estado'] = 'ok' if valores else 'sin_datos'
+        valores_todas = [(resultado[ef] if resultado[ef] is not None else 0.0) for resultado in resultados]
+        agregados[ef] = round(sum(valores_todas) / total_resultados, 1) if total_resultados else None
+        tiene_algun_dato = any(resultado[ef] is not None for resultado in resultados)
+        estados[f'{ef}_estado'] = 'ok' if tiene_algun_dato else 'sin_datos'
 
     ef_disponible = any(resultado['ef_disponible'] for resultado in resultados)
     respuestas = sum(resultado['respuestas'] for resultado in resultados)
@@ -394,7 +409,7 @@ def calcular_resultado_general(cohorte, periodo=None):
     total_posible = (total_asignaturas * 3) + (len(periodos_ids) * 3)
     pct_evidencias = round(total_evidencias / total_posible * 100, 1) if total_posible > 0 else 0
 
-    if all(estados[f'ef{i}_estado'] == 'ok' for i in range(1, 6)):
+    if total_resultados > 0:
         ef_puntaje = round(
             (agregados['ef1'] / 100) * 0.33 +
             (agregados['ef2'] / 100) * 0.27 +
@@ -405,12 +420,12 @@ def calcular_resultado_general(cohorte, periodo=None):
         )
         valoracion_general = round(ef_puntaje * 100, 1)
         resultado_final = valoracion_general
-        estado_general = 'completo'
+        estado_general = 'completo' if all(r['estado_general'] == 'completo' for r in resultados) else 'parcial'
     else:
         ef_puntaje = None
         valoracion_general = None
         resultado_final = None
-        estado_general = 'incompleto'
+        estado_general = 'sin_datos'
 
     if valoracion_general is not None and valoracion_general >= 75:
         escala = 'Satisfactorio'

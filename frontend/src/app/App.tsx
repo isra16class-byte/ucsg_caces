@@ -53,7 +53,7 @@ interface Resultado {
   asignatura: Asignatura;
   resultado_final: number | null;
   valoracion_general: number | null;
-  estado_general: "completo" | "incompleto";
+  estado_general: "completo" | "parcial" | "sin_datos";
   escala: string | null;
   color_escala: string | null;
   evidencias_info: Record<string, { subida: boolean; label: string }>;
@@ -75,7 +75,7 @@ interface ResultadoCohorte {
   periodo?: PeriodoAcademico | null;
   resultado_final: number | null;
   valoracion_general: number | null;
-  estado_general: "completo" | "incompleto";
+  estado_general: "completo" | "parcial" | "sin_datos";
   escala: string | null;
   color_escala: string | null;
   ef1: number | null; ef1_estado: "ok" | "sin_datos";
@@ -549,15 +549,20 @@ function ValoracionGeneral({ resumen }: { resumen: ResultadoCohorte }) {
           <Info size={13} style={{ color: SLATE }} />
         </span>
       </div>
-      {resumen.estado_general === "incompleto" ? (
+      {resumen.resultado_final === null ? (
         <div className="inline-flex flex-col items-end gap-1">
-          <p className="text-lg sm:text-xl font-bold leading-tight" style={{ color: "#64748B", fontFamily: SERIF }}>Incompleto</p>
-          <p className="text-xs font-semibold" style={{ color: "#94A3B8" }}>{faltantes.length ? `Falta evidencia de ${faltantes.join(", ")}` : "Faltan evidencias documentales"}</p>
+          <p className="text-lg sm:text-xl font-bold leading-tight" style={{ color: "#64748B", fontFamily: SERIF }}>Sin datos</p>
+          <p className="text-xs font-semibold" style={{ color: "#94A3B8" }}>No hay asignaturas para calcular</p>
         </div>
       ) : (
         <>
           <p className="text-4xl font-bold leading-none" style={{ color: sc.color, fontFamily: MONO }}>{resumen.resultado_final}%</p>
           <p className="text-sm mt-1.5 font-semibold px-3 py-1 rounded-full inline-block" style={{ background: sc.bg, color: sc.color }}>{resumen.escala}</p>
+          {resumen.estado_general !== "completo" && (
+            <p className="text-xs font-semibold mt-1" style={{ color: "#94A3B8" }}>
+              Parcial{faltantes.length ? ` — falta evidencia de ${faltantes.join(", ")}` : ""}
+            </p>
+          )}
         </>
       )}
     </div>
@@ -691,7 +696,7 @@ function ResultadosPorEF({
           <p className="text-xs mt-0.5 truncate max-w-52" style={{ color: SLATE }}>{asignatura.nombre}</p>
         </div>
         <span className="px-3 py-1 rounded-lg font-bold flex-shrink-0" style={{ background: sc.bg, color: sc.color, fontFamily: MONO, fontSize: 14 }}>
-          {data.resultado_final === null ? "Incompleto" : `${data.resultado_final}%`}
+          {data.resultado_final === null ? "Sin datos" : `${data.resultado_final}%${data.estado_general !== "completo" ? " (parcial)" : ""}`}
         </span>
       </div>
 
@@ -839,7 +844,7 @@ function generarPdfAsignatura(params: {
   doc.setTextColor(255, 255, 255);
   doc.setFont("courier", "bold");
   doc.setFontSize(13);
-  const textoResultado = resultado.resultado_final === null ? "Incompleto" : `${resultado.resultado_final}%`;
+  const textoResultado = resultado.resultado_final === null ? "Sin datos" : `${resultado.resultado_final}%${resultado.estado_general !== "completo" ? " (parcial)" : ""}`;
   doc.text(textoResultado, marginX + 27.5, y + 7, { align: "center" });
   doc.setFontSize(8);
   doc.text(resultado.escala ?? "Falta evidencia", marginX + 27.5, y + 12.5, { align: "center" });
