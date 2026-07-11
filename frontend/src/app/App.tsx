@@ -5,10 +5,8 @@ import {
 } from "lucide-react";
 import { toast, Toaster } from "sonner";
 import {
-  RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer,
+  RadarChart, Radar, PolarGrid, PolarAngleAxis,
 } from "recharts";
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
 import {
   Select,
   SelectContent,
@@ -356,50 +354,63 @@ export default function App() {
         <div className="flex-1 flex items-center justify-center text-sm" style={{ color: SLATE }}>Cargando…</div>
       ) : cohorteId === null ? (
         <EmptyState icon={<TableProperties size={36} />} title="Selecciona o crea una cohorte" subtitle="Usa el selector de arriba." />
-      ) : tab === "resultado" ? (
-        <TabResultado
-          resumenCohorte={resumenCohorte}
-          asignaturas={asignaturas}
-          asignaturaId={asignaturaId}
-          setAsignaturaId={setAsignaturaId}
-          asignaturaActual={asignaturaActual}
-          refreshToken={resultadoRefreshToken}
-          periodoActual={periodoActual}
-          nuevaAsignatura={nuevaAsignatura}
-          setNuevaAsignatura={setNuevaAsignatura}
-          nuevoDocente={nuevoDocente}
-          setNuevoDocente={setNuevoDocente}
-          creandoAsignatura={creandoAsignatura}
-          handleCrearAsignatura={handleCrearAsignatura}
-          cohorteActual={cohortes.find((c) => c.id === cohorteId) ?? null}
-        />
       ) : (
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-          {/* Selector simple de asignatura para Evidencias / Ficha Técnica */}
-          <div className="px-6 pt-4 pb-2 flex-shrink-0 flex items-center gap-2">
-            <label className="text-xs font-semibold" style={{ color: SLATE }}>Asignatura:</label>
-            <select
-              value={asignaturaId ?? ""}
-              onChange={(e) => setAsignaturaId(e.target.value ? Number(e.target.value) : null)}
-              className="text-sm px-3 py-1.5 rounded-lg"
-              style={{ border: BORDER, color: NAVY_DARK }}
-            >
-              <option value="">Seleccionar asignatura</option>
-              {asignaturas.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
-            </select>
+        <>
+          {/* "Resultados" se mantiene SIEMPRE montado (solo se oculta con CSS
+              vía display:none) mientras haya una cohorte seleccionada. Antes se
+              montaba/desmontaba por completo cada vez que se cambiaba de pestaña
+              y se volvía a esta — eso forzaba a recharts a re-medir el radar de
+              cero al volver, lo que se veía como que el gráfico "se encoge" al
+              regresar a Resultados. Ahora el componente (y el radar) nunca se
+              desmonta por cambiar de pestaña, solo por cambiar de cohorte. */}
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden" style={{ display: tab === "resultado" ? "flex" : "none" }}>
+            <TabResultado
+              resumenCohorte={resumenCohorte}
+              asignaturas={asignaturas}
+              asignaturaId={asignaturaId}
+              setAsignaturaId={setAsignaturaId}
+              asignaturaActual={asignaturaActual}
+              refreshToken={resultadoRefreshToken}
+              periodoActual={periodoActual}
+              nuevaAsignatura={nuevaAsignatura}
+              setNuevaAsignatura={setNuevaAsignatura}
+              nuevoDocente={nuevoDocente}
+              setNuevoDocente={setNuevoDocente}
+              creandoAsignatura={creandoAsignatura}
+              handleCrearAsignatura={handleCrearAsignatura}
+              cohorteActual={cohortes.find((c) => c.id === cohorteId) ?? null}
+            />
           </div>
 
-          <div className="flex-1 min-h-0">
-            {asignaturaActual === null ? (
-              <EmptyState icon={<FileText size={36} />} title="Sin asignaturas" subtitle="Crea una asignatura desde la pestaña Resultados." />
-            ) : (
-              <>
-                {tab === "evidencias" && <TabEvidencias asignatura={asignaturaActual} onEvidenceUploaded={handleEvidenceUploaded} />}
-                {tab === "ficha" && <TabFicha />}
-              </>
-            )}
-          </div>
-        </div>
+          {(tab === "evidencias" || tab === "ficha") && (
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              {/* Selector simple de asignatura para Evidencias / Ficha Técnica */}
+              <div className="px-6 pt-4 pb-2 flex-shrink-0 flex items-center gap-2">
+                <label className="text-xs font-semibold" style={{ color: SLATE }}>Asignatura:</label>
+                <select
+                  value={asignaturaId ?? ""}
+                  onChange={(e) => setAsignaturaId(e.target.value ? Number(e.target.value) : null)}
+                  className="text-sm px-3 py-1.5 rounded-lg"
+                  style={{ border: BORDER, color: NAVY_DARK }}
+                >
+                  <option value="">Seleccionar asignatura</option>
+                  {asignaturas.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+                </select>
+              </div>
+
+              <div className="flex-1 min-h-0">
+                {asignaturaActual === null ? (
+                  <EmptyState icon={<FileText size={36} />} title="Sin asignaturas" subtitle="Crea una asignatura desde la pestaña Resultados." />
+                ) : (
+                  <>
+                    {tab === "evidencias" && <TabEvidencias asignatura={asignaturaActual} onEvidenceUploaded={handleEvidenceUploaded} />}
+                    {tab === "ficha" && <TabFicha />}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -610,19 +621,62 @@ function ResultadosPorEF({
   periodoActual: PeriodoAcademico | null;
 }) {
   const [data, setData] = useState<Resultado | null>(null);
+  const [loadingResultado, setLoadingResultado] = useState(true);
   const [exportando, setExportando] = useState(false);
   const radarRef = useRef<HTMLDivElement>(null);
+  const [radarWidth, setRadarWidth] = useState(0);
+  const radarResizeObserver = useRef<ResizeObserver | null>(null);
+
+  // Ref callback (NO useLayoutEffect con deps []) para medir el ancho del
+  // radar. Motivo: mientras `data` es null se muestra el placeholder
+  // "Calculando…" en vez del radar, así que el div a medir no existe todavía
+  // en el primer render. Un useLayoutEffect con `[]` corre una sola vez, justo
+  // en ese primer render donde el div aún no existe, y nunca se reintenta
+  // cuando el radar por fin aparece — eso hacía que el gráfico se quedara con
+  // ancho 0 (invisible) para siempre. La ref callback, en cambio, se ejecuta
+  // cada vez que el nodo se monta o desmonta, así que mide correctamente sin
+  // importar en qué render aparece el div.
+  const radarBoxRef = useCallback((el: HTMLDivElement | null) => {
+    if (radarResizeObserver.current) {
+      radarResizeObserver.current.disconnect();
+      radarResizeObserver.current = null;
+    }
+    if (el) {
+      const medir = () => setRadarWidth(el.clientWidth);
+      medir();
+      radarResizeObserver.current = new ResizeObserver(medir);
+      radarResizeObserver.current.observe(el);
+    }
+  }, []);
 
   useEffect(() => {
-    setData(null);
-    apiFetch(`/api/resultado/?asignatura=${asignatura.id}`).then(setData).catch(() => {});
+    // Importante: NO se hace `setData(null)` acá. Antes, cada clic en una
+    // asignatura vaciaba los datos y forzaba a React a destruir por completo
+    // el contenedor del radar (recharts) y volver a crearlo cuando llegaban
+    // los datos nuevos — ese remount hacía que ResponsiveContainer tuviera
+    // que re-medir su tamaño de forma asíncrona, lo que se veía como que el
+    // gráfico "se encoge" apenas termina de cargar. Ahora se conservan los
+    // datos de la asignatura anterior visibles (atenuados) hasta que llegan
+    // los nuevos, así el gráfico nunca se desmonta entre clics.
+    setLoadingResultado(true);
+    apiFetch(`/api/resultado/?asignatura=${asignatura.id}`)
+      .then(setData)
+      .catch(() => {})
+      .finally(() => setLoadingResultado(false));
   }, [asignatura.id, refreshToken]);
 
   async function handleExportarPDF() {
     if (!data) return;
     setExportando(true);
     try {
-      const [evidenciasRes, encuestaDetalle] = await Promise.all([
+      // jsPDF y html2canvas pesan ~300-400kB juntos y solo se usan acá (Exportar
+      // PDF de la Entrega 3). Se cargan de forma dinámica (code-splitting) para
+      // que NO formen parte del bundle inicial que descarga cualquier usuario
+      // con solo abrir la página — antes se importaban de forma estática al
+      // inicio del archivo y viajaban en cada carga, aunque nunca se exportara.
+      const [{ default: jsPDF }, { default: html2canvas }, evidenciasRes, encuestaDetalle] = await Promise.all([
+        import("jspdf"),
+        import("html2canvas"),
         apiFetch(`/api/evidencias/?asignatura=${asignatura.id}`) as Promise<{ total: number; evidencias: Evidencia[] }>,
         apiFetch(`/api/encuesta-detalle/?asignatura=${asignatura.id}`) as Promise<EncuestaDetalle>,
       ]);
@@ -649,7 +703,7 @@ function ResultadosPorEF({
         radarAspect = canvas.width / canvas.height;
       }
 
-      generarPdfAsignatura({
+      generarPdfAsignatura(jsPDF, {
         asignatura,
         cohorteActual,
         periodoActual,
@@ -689,7 +743,8 @@ function ResultadosPorEF({
   const sc = getStatusColor(data.escala);
 
   return (
-    <div className="h-full bg-white rounded-2xl flex flex-col min-h-0 overflow-hidden" style={{ border: BORDER }}>
+    <div className="h-full bg-white rounded-2xl flex flex-col min-h-0 overflow-hidden"
+      style={{ border: BORDER, opacity: loadingResultado ? 0.55 : 1, transition: "opacity 150ms ease" }}>
       {/* Header de la tarjeta */}
       <div className="flex items-center justify-between px-5 py-3 flex-shrink-0" style={{ borderBottom: "1px solid rgba(27,58,107,0.07)", background: BG_HEADER }}>
         <div>
@@ -703,13 +758,15 @@ function ResultadosPorEF({
 
       {/* Radar */}
       <div ref={radarRef} className="flex-shrink-0 px-5 pt-3" style={{ height: 185, background: "#fff" }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <RadarChart data={radarData} cx="50%" cy="50%" outerRadius="70%">
-            <PolarGrid stroke="#E5E7EB" />
-            <PolarAngleAxis dataKey="subject" tick={{ fill: SLATE, fontSize: 11, fontWeight: 700, fontFamily: MONO }} />
-            <Radar dataKey="score" stroke="#16A34A" fill="#16A34A" fillOpacity={0.15} strokeWidth={2} dot={{ r: 4, fill: "#16A34A" }} />
-          </RadarChart>
-        </ResponsiveContainer>
+        <div ref={radarBoxRef} style={{ width: "100%", height: "100%" }}>
+          {radarWidth > 0 && (
+            <RadarChart width={radarWidth} height={185} data={radarData} cx="50%" cy="50%" outerRadius="70%">
+              <PolarGrid stroke="#E5E7EB" />
+              <PolarAngleAxis dataKey="subject" tick={{ fill: SLATE, fontSize: 11, fontWeight: 700, fontFamily: MONO }} />
+              <Radar dataKey="score" stroke="#16A34A" fill="#16A34A" fillOpacity={0.15} strokeWidth={2} dot={{ r: 4, fill: "#16A34A" }} />
+            </RadarChart>
+          )}
+        </div>
       </div>
 
       {/* Grid de EF */}
@@ -787,7 +844,7 @@ function colorPorEscala(escala: string | null): [number, number, number] {
   }
 }
 
-function generarPdfAsignatura(params: {
+function generarPdfAsignatura(jsPDF: typeof import("jspdf").default, params: {
   asignatura: Asignatura;
   cohorteActual: Cohorte | null;
   periodoActual: PeriodoAcademico | null;
@@ -1150,10 +1207,12 @@ function TabEvidencias({ asignatura, onEvidenceUploaded }: { asignatura: Asignat
             </a>
           )}
         </div>
-        <div className="flex-1 overflow-hidden flex items-center justify-center min-h-0">
+        <div className="flex-1 overflow-hidden flex items-center justify-center min-h-0" style={{ minHeight: 400 }}>
           {selectedEvidencia ? (
             <iframe
               src={selectedEvidencia.archivo_url}
+              width="100%"
+              height="100%"
               className="w-full h-full"
               title={selectedEvidencia.archivo_nombre}
               style={{ border: "none" }}
