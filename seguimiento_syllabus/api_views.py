@@ -5,8 +5,9 @@ from rest_framework import status
 from django.shortcuts import get_object_or_404
 from django.db import models
 
-from .models import Cohorte, PeriodoAcademico, Asignatura, Evidencia
+from .models import Carrera, Cohorte, PeriodoAcademico, Asignatura, Evidencia
 from .serializers import (
+    CarreraSerializer,
     CohorteSerializer,
     PeriodoAcademicoSerializer,
     AsignaturaSerializer,
@@ -29,11 +30,41 @@ def api_cohortes(request):
         nombre = request.data.get('nombre')
         if not nombre:
             return Response({'error': 'El campo "nombre" es requerido.'}, status=status.HTTP_400_BAD_REQUEST)
-        cohorte = Cohorte.objects.create(nombre=nombre)
+
+        # Cohorte.carrera ahora es obligatorio (ver Carrera en models.py).
+        # El frontend actual no manda "carrera_id" todavía (solo se trabaja
+        # con "Desarrollo de Software"), así que si no viene, se usa esa
+        # carrera por default en vez de romper la creación — cuando se
+        # agreguen más carreras, el frontend puede empezar a mandar
+        # "carrera_id" sin necesitar otro cambio de backend.
+        carrera_id = request.data.get('carrera_id') or request.data.get('carrera')
+        if carrera_id:
+            carrera = get_object_or_404(Carrera, id=carrera_id)
+        else:
+            carrera, _ = Carrera.objects.get_or_create(nombre='Desarrollo de Software')
+
+        cohorte = Cohorte.objects.create(nombre=nombre, carrera=carrera)
         return Response(CohorteSerializer(cohorte).data, status=status.HTTP_201_CREATED)
 
-    cohortes = Cohorte.objects.all()
-    return Response(CohorteSerializer(cohortes, many=True).data)
+    cohortes_qs = Cohorte.objects.all()
+    carrera_id = request.GET.get('carrera')
+    if carrera_id:
+        cohortes_qs = cohortes_qs.filter(carrera_id=carrera_id)
+    return Response(CohorteSerializer(cohortes_qs, many=True).data)
+
+
+# ---------- Carreras ----------
+
+@api_view(['GET'])
+def api_carreras(request):
+    """
+    Lista las Carrera existentes. Hoy solo va a devolver 1 fila
+    ("Desarrollo de Software"), pero el endpoint ya existe para cuando se
+    agreguen las demás carreras del TEC (no hace falta otra migración de
+    API para eso, solo empezar a poblar más filas).
+    """
+    carreras = Carrera.objects.all()
+    return Response(CarreraSerializer(carreras, many=True).data)
 
 
 # ---------- Periodos académicos ----------
@@ -117,38 +148,40 @@ def api_evidencias(request):
         tipo = request.data.get('tipo')
         data = request.data.copy()
 
-        if tipo in Evidencia.TIPOS_POR_PERIODO:
-            # EF2/EF3/EF5: evidencia institucional del PAO. El frontend
-            # manda "periodo_academico" (o "asignatura", desde la cual
-            # derivamos el PAO — así no obligamos a tocar cada llamada del
-            # frontend si en algún flujo solo tiene a mano la asignatura).
-            periodo_id = data.get('periodo_academico') or data.get('periodo_id')
-            if not periodo_id:
-                asignatura_id = data.get('asignatura_id') or data.get('asignatura')
-                if asignatura_id:
-                    periodo_id = get_object_or_404(Asignatura, id=asignatura_id).periodo_academico_id
-            if not periodo_id:
-                return Response(
-                    {'error': 'Este tipo de evidencia es institucional del PAO: se requiere "periodo_academico" (o "asignatura" para derivarlo).'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            periodo = get_object_or_404(PeriodoAcademico, id=periodo_id)
-            data['periodo_academico'] = str(periodo.id)
-            data.pop('asignatura', None)
-            data.pop('asignatura_id', None)
-            data.pop('periodo_id', None)
+        # El frontend SIEMPRE manda "asignatura" (la que tiene seleccionada
+        # en pantalla), sin importar el nivel real del tipo de evidencia —
+        # el backend deriva desde ahí tanto el PeriodoAcademico como la
+        # Carrera (asignatura -> periodo_academico -> cohorte -> carrera),
+        # así el flujo de subida en la UI no cambia aunque el nivel de un
+        # tipo de evidencia cambie en el futuro.
+        asignatura_id = data.get('asignatura_id') or data.get('asignatura')
+        if not asignatura_id:
+            return Response(
+                {'error': 'Se requiere "asignatura_id".'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        asignatura = get_object_or_404(Asignatura, id=asignatura_id)
+        carrera_id = asignatura.periodo_academico.cohorte.carrera_id
+
+        data.pop('asignatura', None)
+        data.pop('asignatura_id', None)
+        data.pop('periodo_academico', None)
+        data.pop('periodo_id', None)
+        data.pop('carrera', None)
+
+        if tipo in Evidencia.TIPOS_POR_CARRERA:
+            # malla_curricular / reglamento_normativa (EF5): evidencia de
+            # TODA la carrera — se guarda sin asignatura ni periodo.
+            data['carrera'] = str(carrera_id)
+        elif tipo in Evidencia.TIPOS_POR_PERIODO:
+            # Hoy ningún tipo cae acá (ver TIPOS_POR_PERIODO en models.py),
+            # se deja implementado por si a futuro EF4 suma evidencia
+            # documental propia de nivel PAO.
+            data['periodo_academico'] = str(asignatura.periodo_academico_id)
         else:
-            asignatura_id = data.get('asignatura_id') or data.get('asignatura')
-            if not asignatura_id:
-                return Response(
-                    {'error': 'Se requiere "asignatura_id".'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            asignatura = get_object_or_404(Asignatura, id=asignatura_id)
+            # syllabus / acta_retroalimentacion / acta_ajuste_curricular
+            # (EF2) / evidencia_difusion (EF3): nivel asignatura, sin cambios.
             data['asignatura'] = str(asignatura.id)
-            data.pop('asignatura_id', None)
-            data.pop('periodo_academico', None)
-            data.pop('periodo_id', None)
 
         serializer = EvidenciaSerializer(data=data, context={'request': request})
         if serializer.is_valid():
@@ -173,14 +206,18 @@ def api_evidencias(request):
     evidencias_qs = Evidencia.objects.all()
 
     if asignatura_id:
-        # Devolvemos la unión: evidencia propia de la asignatura (EF1
-        # general, malla/syllabus/acta_retro) + evidencia institucional
-        # del PAO al que pertenece (EF2/EF3/EF5) — así la pestaña
-        # Evidencias muestra ambas sin que el frontend tenga que pedir 2
-        # veces.
+        # Devolvemos la unión: evidencia propia de la asignatura (syllabus,
+        # acta_retroalimentacion, acta_ajuste_curricular EF2, evidencia_difusion
+        # EF3) + evidencia de la CARRERA a la que pertenece esa asignatura
+        # (malla_curricular, reglamento_normativa EF5), derivada de la misma
+        # cadena asignatura -> periodo_academico -> cohorte -> carrera — así
+        # la pestaña Evidencias muestra ambas sin que el frontend tenga que
+        # pedir 2 veces.
         asignatura = get_object_or_404(Asignatura, id=asignatura_id)
+        carrera_id = asignatura.periodo_academico.cohorte.carrera_id
         evidencias_qs = evidencias_qs.filter(
-            models.Q(asignatura_id=asignatura_id) | models.Q(periodo_academico_id=asignatura.periodo_academico_id)
+            models.Q(asignatura_id=asignatura_id) |
+            models.Q(carrera_id=carrera_id, tipo__in=Evidencia.TIPOS_POR_CARRERA)
         )
     elif periodo_id:
         evidencias_qs = evidencias_qs.filter(periodo_academico_id=periodo_id)
