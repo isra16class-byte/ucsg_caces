@@ -208,19 +208,20 @@ def obtener_detalle_encuesta(materia=None):
     }
 
 
-def _calcular_resultado_generico(evidencias_qs, materia_filtro, periodo=None):
+def _calcular_resultado_generico(evidencias_qs, materia_filtro, carrera=None):
     """
     Núcleo del cálculo EF1-EF5, parametrizado por:
-    - evidencias_qs: queryset de Evidencia POR ASIGNATURA a considerar (solo
-      cubre malla_curricular/syllabus/acta_retroalimentacion — evidencia que
-      sí varía por materia).
+    - evidencias_qs: queryset de Evidencia POR ASIGNATURA a considerar
+      (syllabus, acta_retroalimentacion, acta_ajuste_curricular EF2,
+      evidencia_difusion EF3 — evidencia que sí varía por materia).
     - materia_filtro: nombre de materia para filtrar la encuesta (una
       asignatura), o None para agregarla completa (evaluación general
       de la cohorte, tal como la evalúa CACES).
-    - periodo: PeriodoAcademico del que se toma la evidencia INSTITUCIONAL
-      (EF2/EF3/EF5 — acta_ajuste_curricular, evidencia_difusion,
-      reglamento_normativa), que es la misma para todas las asignaturas de
-      ese PAO. Si es None, EF2/EF3/EF5 quedan en "sin_datos".
+    - carrera: Carrera de la que se toma la evidencia de NIVEL CARRERA
+      (malla_curricular, reglamento_normativa EF5 — ver
+      Evidencia.TIPOS_POR_CARRERA), que aplica a TODA la carrera, no solo a
+      un PAO o una asignatura puntual. Si es None, esos tipos quedan en
+      "sin_datos".
     """
     evidencias_info = {
         'malla_curricular': {'subida': False, 'label': 'Malla Curricular'},
@@ -232,6 +233,7 @@ def _calcular_resultado_generico(evidencias_qs, materia_filtro, periodo=None):
     }
     tipos_asignatura_vigentes = set(
         evidencias_qs.filter(vigente=True)
+        .exclude(tipo__in=Evidencia.TIPOS_POR_CARRERA)
         .exclude(tipo__in=Evidencia.TIPOS_POR_PERIODO)
         .values_list('tipo', flat=True)
     )
@@ -239,24 +241,39 @@ def _calcular_resultado_generico(evidencias_qs, materia_filtro, periodo=None):
         if tipo in evidencias_info:
             evidencias_info[tipo]['subida'] = True
 
-    if periodo is not None:
-        tipos_periodo_vigentes = set(
-            Evidencia.objects.filter(periodo_academico=periodo, vigente=True, tipo__in=Evidencia.TIPOS_POR_PERIODO)
+    if carrera is not None:
+        tipos_carrera_vigentes = set(
+            Evidencia.objects.filter(carrera=carrera, vigente=True, tipo__in=Evidencia.TIPOS_POR_CARRERA)
             .values_list('tipo', flat=True)
         )
-        for tipo in tipos_periodo_vigentes:
+        for tipo in tipos_carrera_vigentes:
             evidencias_info[tipo]['subida'] = True
 
     tiene_ef2 = evidencias_info['acta_ajuste_curricular']['subida']
     tiene_ef3 = evidencias_info['evidencia_difusion']['subida']
     tiene_ef5 = evidencias_info['reglamento_normativa']['subida']
+    tiene_syllabus = evidencias_info['syllabus']['subida']
+    tiene_malla = evidencias_info['malla_curricular']['subida']
     total_evidencias = sum([tiene_ef2, tiene_ef3, tiene_ef5])
     pct_evidencias = round(total_evidencias / 3 * 100, 1) if total_evidencias > 0 else 0
 
     datos_ef = _calcular_ef_desde_csv(materia=materia_filtro)
     ef_disponible = datos_ef is not None and datos_ef['respuestas'] > 0
 
-    ef1 = datos_ef['ef1'] if ef_disponible else None
+    # EF1 combinado desde el 11 de julio: antes salía 100% de la encuesta
+    # (P5+P8+P13). Ahora son 3 partes iguales — encuesta, syllabus subido,
+    # malla_curricular subida — cada una que falte cuenta como 0 (misma
+    # filosofía de "avance parcial" que el resto de esta función). Solo se
+    # marca "Sin datos" si las 3 faltan a la vez; con al menos 1 ya se
+    # muestra el valor parcial (ej. solo malla → 33.3%).
+    ef1_encuesta = datos_ef['ef1'] if ef_disponible else 0.0
+    ef1_syllabus = 1.0 if tiene_syllabus else 0.0
+    ef1_malla = 1.0 if tiene_malla else 0.0
+    ef1 = (
+        round((ef1_encuesta + ef1_syllabus + ef1_malla) / 3, 4)
+        if (ef_disponible or tiene_syllabus or tiene_malla)
+        else None
+    )
     ef3 = datos_ef['ef3'] if ef_disponible else None
     ef4 = datos_ef['ef4'] if ef_disponible else None
     respuestas = datos_ef['respuestas'] if ef_disponible else 0
@@ -330,7 +347,7 @@ def _calcular_resultado_generico(evidencias_qs, materia_filtro, periodo=None):
         'pct_evidencias': pct_evidencias,
         'ef_disponible': ef_disponible,
         'ef1': round(ef1 * 100, 1) if ef1 is not None else None,
-        'ef1_estado': 'ok' if ef_disponible else 'sin_datos',
+        'ef1_estado': 'ok' if ef1 is not None else 'sin_datos',
         'ef2': round(ef2 * 100, 1) if ef2 is not None else None,
         'ef2_estado': ef2_estado,
         'ef3': round(ef3_doc * 100, 1) if ef3_doc is not None else None,
@@ -348,12 +365,15 @@ def _calcular_resultado_generico(evidencias_qs, materia_filtro, periodo=None):
 def calcular_resultado_asignatura(asignatura):
     """
     Calcula el resultado EF1-EF5 para UNA asignatura: sus evidencias propias
-    (malla/syllabus/acta_retro) + la evidencia institucional de su PAO
-    (EF2/EF3/EF5), y la encuesta filtrada por su nombre de materia.
+    (syllabus/acta_retro/EF2/EF3) + la evidencia de nivel CARRERA
+    (malla_curricular, reglamento_normativa EF5) de la carrera a la que
+    pertenece (vía asignatura -> periodo_academico -> cohorte -> carrera), y
+    la encuesta filtrada por su nombre de materia.
     """
     evidencias_qs = Evidencia.objects.filter(asignatura=asignatura)
+    carrera = asignatura.periodo_academico.cohorte.carrera
     return _calcular_resultado_generico(
-        evidencias_qs, materia_filtro=asignatura.nombre, periodo=asignatura.periodo_academico,
+        evidencias_qs, materia_filtro=asignatura.nombre, carrera=carrera,
     )
 
 
@@ -370,13 +390,14 @@ def calcular_resultado_general(cohorte, periodo=None):
 
     resultados = [calcular_resultado_asignatura(asignatura) for asignatura in asignaturas_qs]
 
-    # Evidencia propia de asignatura (malla/syllabus/acta_retro) + evidencia
-    # institucional de los PAO involucrados (EF2/EF3/EF5, ya no depende de
-    # la asignatura sino del periodo académico).
+    # Evidencia propia de asignatura (syllabus/acta_retro/EF2/EF3, que
+    # volvieron a ser por asignatura) + evidencia de CARRERA
+    # (malla_curricular, reglamento_normativa EF5) — esta última es una
+    # sola consulta, NO se multiplica por asignatura ni por PAO, ya que
+    # aplica a toda la carrera de una vez.
     asignatura_evidencias_qs = Evidencia.objects.filter(asignatura__in=asignaturas_qs, vigente=True)
-    periodos_ids = list(asignaturas_qs.values_list('periodo_academico_id', flat=True).distinct())
-    periodo_evidencias_qs = Evidencia.objects.filter(
-        periodo_academico_id__in=periodos_ids, vigente=True, tipo__in=Evidencia.TIPOS_POR_PERIODO,
+    carrera_evidencias_qs = Evidencia.objects.filter(
+        carrera=cohorte.carrera, vigente=True, tipo__in=Evidencia.TIPOS_POR_CARRERA,
     )
 
     # IMPORTANTE: antes esto promediaba cada EF solo entre las asignaturas
@@ -405,8 +426,16 @@ def calcular_resultado_general(cohorte, periodo=None):
     ) if any(resultado['promedio_general'] is not None for resultado in resultados) else 0
 
     total_asignaturas = asignaturas_qs.count()
-    total_evidencias = asignatura_evidencias_qs.exclude(tipo__in=Evidencia.TIPOS_POR_PERIODO).count() + periodo_evidencias_qs.count()
-    total_posible = (total_asignaturas * 3) + (len(periodos_ids) * 3)
+    # Tipos de nivel asignatura: todos menos los de nivel carrera y los de
+    # nivel periodo (hoy TIPOS_POR_PERIODO está vacío, ver models.py).
+    tipos_asignatura_count = len(Evidencia.TIPO_CHOICES) - len(Evidencia.TIPOS_POR_CARRERA) - len(Evidencia.TIPOS_POR_PERIODO)
+    total_evidencias = (
+        asignatura_evidencias_qs.exclude(tipo__in=Evidencia.TIPOS_POR_CARRERA).count()
+        + carrera_evidencias_qs.count()
+    )
+    # La evidencia de carrera cuenta UNA sola vez (no por asignatura ni por
+    # PAO), a diferencia de la de nivel asignatura que sí se multiplica.
+    total_posible = (total_asignaturas * tipos_asignatura_count) + len(Evidencia.TIPOS_POR_CARRERA)
     pct_evidencias = round(total_evidencias / total_posible * 100, 1) if total_posible > 0 else 0
 
     if total_resultados > 0:
@@ -444,12 +473,12 @@ def calcular_resultado_general(cohorte, periodo=None):
         color_escala = None
 
     evidencias_info = {
-        'malla_curricular': {'subida': asignatura_evidencias_qs.filter(tipo='malla_curricular').exists(), 'label': 'Malla Curricular'},
+        'malla_curricular': {'subida': carrera_evidencias_qs.filter(tipo='malla_curricular').exists(), 'label': 'Malla Curricular'},
         'syllabus': {'subida': asignatura_evidencias_qs.filter(tipo='syllabus').exists(), 'label': 'Syllabus'},
         'acta_retroalimentacion': {'subida': asignatura_evidencias_qs.filter(tipo='acta_retroalimentacion').exists(), 'label': 'Acta de Retroalimentación'},
-        'acta_ajuste_curricular': {'subida': periodo_evidencias_qs.filter(tipo='acta_ajuste_curricular').exists(), 'label': 'Acta de Ajuste Curricular (EF2)'},
-        'evidencia_difusion': {'subida': periodo_evidencias_qs.filter(tipo='evidencia_difusion').exists(), 'label': 'Evidencia de Difusión (EF3)'},
-        'reglamento_normativa': {'subida': periodo_evidencias_qs.filter(tipo='reglamento_normativa').exists(), 'label': 'Reglamento / Normativa Institucional (EF5)'},
+        'acta_ajuste_curricular': {'subida': asignatura_evidencias_qs.filter(tipo='acta_ajuste_curricular').exists(), 'label': 'Acta de Ajuste Curricular (EF2)'},
+        'evidencia_difusion': {'subida': asignatura_evidencias_qs.filter(tipo='evidencia_difusion').exists(), 'label': 'Evidencia de Difusión (EF3)'},
+        'reglamento_normativa': {'subida': carrera_evidencias_qs.filter(tipo='reglamento_normativa').exists(), 'label': 'Reglamento / Normativa Institucional (EF5)'},
     }
 
     return {
