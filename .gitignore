@@ -6,6 +6,8 @@ CLAUDE.md
 db.sqlite3
 media/
 venv/
+.env
+!.env.example
 **/__pycache__/
 *.pyc
 *.pyo
@@ -15,3 +17,4 @@ venv/
 frontend/node_modules/
 frontend/dist/
 frontend/.env
+frontend/.vite/
