@@ -19,6 +19,7 @@ from .views import (  # noqa: F401
     calcular_resultado_asignatura, calcular_resultado_general,
     obtener_materias_disponibles,
     obtener_detalle_encuesta,
+    csv_cache_info,
 )
 
 
@@ -305,7 +306,10 @@ def api_encuesta_resultados(request):
     materia = request.GET.get('materia')
     datos = _calcular_ef_desde_csv(materia=materia)
     if datos is None:
+        # Solo pasa si nunca hubo una descarga exitosa en este proceso (no
+        # hay cache que usar de respaldo) — ver _descargar_csv en views.py.
         return Response({'error': 'No se pudo conectar con Google Sheets.'}, status=503)
+    datos['cache'] = csv_cache_info()
     return Response(datos)
 
 

@@ -1,11 +1,24 @@
 import csv
+import logging
+import time
+import urllib.error
 import urllib.request
 import re
 
 from .models import Asignatura, Evidencia
 
+logger = logging.getLogger(__name__)
+
 URL_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSS9YX0N26YnO5pUAYc2U7JchenIAEasrpq0gs79Up0fOLrayn6JX-FmuolcXSkIL0MReJ7j0jpXPtC/pub?output=csv"
 PUNTAJE_MAP = {"Siempre": 5, "Casi siempre": 4, "Algunas veces": 3, "Pocas veces": 2, "Nunca": 1}
+
+# Cache en memoria del último CSV descargado con éxito, para no dejar a la
+# UI en "sin datos" total si Google Sheets falla momentáneamente (red caída,
+# rate limit, mantenimiento). Vive mientras dure el proceso del servidor —
+# es intencional que se pierda en cada reinicio/deploy, no se persiste en
+# base de datos porque es solo un colchón de disponibilidad, no una fuente
+# de verdad.
+_CSV_CACHE = {"lines": None, "timestamp": None, "degradado": False}
 
 
 def _buscar_columna(preguntas, numero):
@@ -16,10 +29,12 @@ def _buscar_columna(preguntas, numero):
 def _texto_pregunta(header, numero):
     """
     Extrae el texto legible de una pregunta a partir del encabezado real de
-    columna del CSV (que trae el formato "...[P5. Informó al inicio...]").
-    Se usa para el detalle de encuesta del PDF (Entrega 3), para no
-    hardcodear el texto de las 23 preguntas en el frontend: se toma siempre
-    del propio CSV, misma fuente que ya usa el cálculo de EF1/EF4.
+    columna del CSV (formato genérico "...[P<numero>. <texto de la
+    pregunta>]", ej. "[P6. Informa al inicio del periodo académico...]").
+    No asumir aquí ninguna correspondencia P-número -> EF: esa
+    correspondencia vive solo en _calcular_ef_desde_csv (ef1_pregs =
+    P5+P8+P13, ef4_pregs = P6) y puede cambiar ahí sin tocar esta función,
+    que solo formatea texto para el detalle de encuesta del PDF (Entrega 3).
     """
     m = re.search(rf'\[P{numero}\.?\s*(.*?)\]', header, re.IGNORECASE)
     if m and m.group(1).strip():
@@ -27,10 +42,60 @@ def _texto_pregunta(header, numero):
     return header.strip()
 
 
-def _descargar_csv():
-    req = urllib.request.Request(URL_CSV, headers={'User-Agent': 'Mozilla/5.0'})
-    response = urllib.request.urlopen(req, timeout=10)
-    return [l.decode("utf-8") for l in response.readlines()]
+def _descargar_csv(usar_cache_si_falla=True):
+    """
+    Descarga el CSV de respuestas de la encuesta.
+
+    Si la descarga falla (red, timeout, Google Sheets caído) y hay una copia
+    previa en cache, se usa esa copia y se loggea como WARNING (degradado
+    pero funcional) en vez de tirar la excepción hacia arriba, que es lo que
+    antes convertía cualquier falla de red pasajera en "sin datos" para
+    TODOS los EF basados en encuesta (EF1/EF4), incluso si la última
+    descarga exitosa fue hace 5 minutos.
+
+    Si falla y NO hay cache (primera vez, o llamado explícitamente sin
+    fallback), se loggea como ERROR y se re-lanza la excepción — el llamador
+    decide qué hacer (hoy: devolver None / "sin datos").
+    """
+    try:
+        req = urllib.request.Request(URL_CSV, headers={'User-Agent': 'Mozilla/5.0'})
+        response = urllib.request.urlopen(req, timeout=10)
+        lines = [l.decode("utf-8") for l in response.readlines()]
+        _CSV_CACHE["lines"] = lines
+        _CSV_CACHE["timestamp"] = time.time()
+        _CSV_CACHE["degradado"] = False
+        return lines
+    except urllib.error.URLError as exc:
+        logger.warning("No se pudo conectar con el CSV de la encuesta (%s): %s", URL_CSV, exc)
+    except Exception as exc:  # noqa: BLE001 - errores inesperados del parseo/decode también deben quedar en log
+        logger.error("Error inesperado descargando/leyendo el CSV de la encuesta: %s", exc, exc_info=True)
+
+    if usar_cache_si_falla and _CSV_CACHE["lines"] is not None:
+        edad_minutos = (time.time() - _CSV_CACHE["timestamp"]) / 60
+        _CSV_CACHE["degradado"] = True
+        logger.warning(
+            "Usando copia en cache del CSV de la encuesta (%.1f min de antigüedad) por falla de descarga.",
+            edad_minutos,
+        )
+        return _CSV_CACHE["lines"]
+
+    raise RuntimeError("No se pudo descargar el CSV de la encuesta y no hay copia en cache disponible.")
+
+
+def csv_cache_info():
+    """
+    Expone si los datos que se acaban de devolver son en vivo o una copia
+    de respaldo por falla de descarga, y su antigüedad — para que la API
+    pueda avisar al frontend cuándo el dato de encuesta mostrado no está
+    actualizado (ver api_encuesta_resultados). Devuelve None si nunca hubo
+    una descarga exitosa en este proceso (no hay ni siquiera respaldo).
+    """
+    if _CSV_CACHE["timestamp"] is None:
+        return None
+    return {
+        "degradado": _CSV_CACHE["degradado"],
+        "edad_segundos": round(time.time() - _CSV_CACHE["timestamp"], 1),
+    }
 
 
 def _detectar_indice_materia(headers):
@@ -69,7 +134,17 @@ def obtener_materias_disponibles():
 
 def _calcular_ef_desde_csv(materia=None):
     """
-    Calcula EF1, EF3, EF4 (provenientes de la encuesta de heteroevaluación).
+    Calcula EF1 y EF4 (provenientes de la encuesta de heteroevaluación).
+
+    EF3 se decidió 100% documental (evidencia_difusion, ver
+    _calcular_resultado_generico) en vez de mezclarlo con la pregunta P7 de
+    la encuesta: el estándar de CACES para EF3 pide fuentes de información
+    verificables (EVA, videos, informes de difusión), y la pregunta P7 mide
+    percepción del estudiante, que es un dato más blando y no equivalente.
+    Por eso esta función ya no calcula ni devuelve un "ef3" — si en el
+    futuro se decide combinarlos (como sí se hace con EF1), agregar de
+    vuelta `ef3_pregs = _buscar_columna(preguntas, 7)` aquí.
+
     Si se pasa `materia`, solo se consideran las respuestas de esa materia;
     si es None, se agregan TODAS las respuestas (comportamiento original).
     """
@@ -107,8 +182,22 @@ def _calcular_ef_desde_csv(materia=None):
             promedios[p] = 0
 
     ef1_pregs = _buscar_columna(preguntas, 5) + _buscar_columna(preguntas, 8) + _buscar_columna(preguntas, 13)
-    ef3_pregs = _buscar_columna(preguntas, 7)
     ef4_pregs = _buscar_columna(preguntas, 6)
+
+    # Si el formulario de Google cambió (se borró/renombró una pregunta),
+    # _buscar_columna deja de encontrar la columna correspondiente y el EF
+    # afectado cae silenciosamente a 0 sin que nadie se entere. Loggeamos
+    # esto como error para que quede en los logs del servidor, no solo como
+    # un número raro en el dashboard.
+    for numero, cols, nombre_ef in [(5, _buscar_columna(preguntas, 5), 'EF1 (P5)'),
+                                     (8, _buscar_columna(preguntas, 8), 'EF1 (P8)'),
+                                     (13, _buscar_columna(preguntas, 13), 'EF1 (P13)'),
+                                     (6, ef4_pregs, 'EF4 (P6)')]:
+        if not cols:
+            logger.error(
+                "No se encontró la columna P%s en el CSV de la encuesta (esperada para %s). "
+                "¿Cambió el formulario de Google Forms?", numero, nombre_ef,
+            )
 
     def promedio_ef_decimal(preg_list):
         vals = [promedios[p] for p in preg_list if p in promedios]
@@ -117,16 +206,10 @@ def _calcular_ef_desde_csv(materia=None):
         return round(sum(vals) / len(vals) / 100, 4)
 
     ef1 = promedio_ef_decimal(ef1_pregs)
-    ef3 = promedio_ef_decimal(ef3_pregs)
     ef4 = promedio_ef_decimal(ef4_pregs)
-    ef2 = 0.0
-    ef5 = 0.0
-
-    ef_puntaje = round(ef1*0.33 + ef2*0.27 + ef3*0.20 + ef4*0.13 + ef5*0.07, 2)
 
     return {
-        'ef1': ef1, 'ef2': ef2, 'ef3': ef3, 'ef4': ef4, 'ef5': ef5,
-        'ef_puntaje': ef_puntaje,
+        'ef1': ef1, 'ef4': ef4,
         'respuestas': total_filas,
         'promedio_general': round(sum(promedios.values()) / len(promedios), 1) if promedios else 0,
     }
@@ -274,7 +357,6 @@ def _calcular_resultado_generico(evidencias_qs, materia_filtro, carrera=None):
         if (ef_disponible or tiene_syllabus or tiene_malla)
         else None
     )
-    ef3 = datos_ef['ef3'] if ef_disponible else None
     ef4 = datos_ef['ef4'] if ef_disponible else None
     respuestas = datos_ef['respuestas'] if ef_disponible else 0
     promedio_general = datos_ef['promedio_general'] if ef_disponible else 0
@@ -292,6 +374,10 @@ def _calcular_resultado_generico(evidencias_qs, materia_filtro, carrera=None):
     # sección 4 del documento de contexto: "si falta evidencia de un EF, el
     # sistema NO inventa un 0%, muestra Sin datos SOLO en ese EF puntual".
     ef2 = 1.0 if tiene_ef2 else None
+    # ef3_doc es EF3 completo (no un "EF3 documental" entre otras fuentes):
+    # a diferencia de EF1, que combina encuesta + evidencia, EF3 se decidió
+    # 100% documental por diseño (ver docstring de _calcular_ef_desde_csv).
+    # No existe ningún otro componente de EF3 en ningún lado del cálculo.
     ef3_doc = 1.0 if tiene_ef3 else None
     ef5 = 1.0 if tiene_ef5 else None
 
