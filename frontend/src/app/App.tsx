@@ -669,47 +669,27 @@ function ResultadosPorEF({
     if (!data) return;
     setExportando(true);
     try {
-      // jsPDF y html2canvas pesan ~300-400kB juntos y solo se usan acá (Exportar
-      // PDF de la Entrega 3). Se cargan de forma dinámica (code-splitting) para
-      // que NO formen parte del bundle inicial que descarga cualquier usuario
-      // con solo abrir la página — antes se importaban de forma estática al
-      // inicio del archivo y viajaban en cada carga, aunque nunca se exportara.
-      const [{ default: jsPDF }, { default: html2canvas }, evidenciasRes, encuestaDetalle] = await Promise.all([
+      // jsPDF pesa ~300kB y solo se usa acá (Exportar PDF de la Entrega 3). Se
+      // carga de forma dinámica (code-splitting) para que NO forme parte del
+      // bundle inicial que descarga cualquier usuario con solo abrir la
+      // página. Ya NO se usa html2canvas: el resumen general (antes una
+      // captura de pantalla del radar) ahora se dibuja directamente con
+      // jsPDF como donut + barras horizontales, igual que el resto del PDF —
+      // esto fue lo que eliminó el desorden/espaciado irregular del PDF
+      // anterior, porque todas las alturas se calculan a partir del texto
+      // real en vez de mezclar una imagen capturada del DOM con coordenadas
+      // fijas en milímetros.
+      const [{ default: jsPDF }, evidenciasRes, encuestaDetalle] = await Promise.all([
         import("jspdf"),
-        import("html2canvas"),
         apiFetch(`/api/evidencias/?asignatura=${asignatura.id}`) as Promise<{ total: number; evidencias: Evidencia[] }>,
         apiFetch(`/api/encuesta-detalle/?asignatura=${asignatura.id}`) as Promise<EncuestaDetalle>,
       ]);
-
-      let radarImg: string | null = null;
-      let radarAspect = 1;
-      if (radarRef.current) {
-        const rect = radarRef.current.getBoundingClientRect();
-        // El contenedor ocupa el 100% del ancho del panel, pero recharts dibuja
-        // el círculo del radar centrado y acotado por la altura (más angosta).
-        // Se recorta solo ese cuadrado central para no capturar el espacio en
-        // blanco de los costados (que antes hacía ver el radar chico y ancho).
-        const lado = rect.height;
-        const offsetX = Math.max(0, (rect.width - lado) / 2);
-        const canvas = await html2canvas(radarRef.current, {
-          backgroundColor: "#ffffff",
-          scale: 2,
-          x: offsetX,
-          y: 0,
-          width: lado,
-          height: rect.height,
-        });
-        radarImg = canvas.toDataURL("image/png");
-        radarAspect = canvas.width / canvas.height;
-      }
 
       generarPdfAsignatura(jsPDF, {
         asignatura,
         cohorteActual,
         periodoActual,
         resultado: data,
-        radarImg,
-        radarAspect,
         evidencias: evidenciasRes.evidencias,
         encuestaDetalle,
       });
@@ -805,36 +785,57 @@ function ResultadosPorEF({
   );
 }
 
-// ── Generación del PDF de la Entrega 3 (jsPDF + html2canvas) ──────────────
-// Nota de diseño: jsPDF no permite embeber "Libre Baskerville"/"DM Mono" sin
-// cargar los archivos de fuente como base64 (peso extra innecesario para
-// este caso), así que se usan las fuentes nativas de jsPDF más parecidas
-// ("times" como sustituto serif, "courier" como sustituto mono) manteniendo
-// la MISMA paleta de colores (NAVY/NAVY_DARK/SLATE) del resto de la app.
+// ── Generación del PDF de la Entrega 3 (jsPDF, sin html2canvas) ───────────
+// Rediseño 11 de julio: el radar ya NO se captura con html2canvas (esa
+// captura de pantalla era la causa de espaciados inconsistentes: cualquier
+// diferencia de tamaño entre lo que se veía en pantalla y el recorte
+// calculado desalineaba todo lo que venía después). En su lugar, el
+// resumen general se dibuja como un donut + barras horizontales 100% con
+// jsPDF, igual que el resto del documento, así todas las alturas se miden
+// ANTES de dibujar (nunca con un valor fijo "a ojo") y el salto de página
+// (`checkPageBreak`) siempre reserva el espacio real que va a ocupar cada
+// bloque. Se agregan además dos tablas (fuentes de evidencia y evidencia
+// documental) con encabezado de color y filas alternadas, y el anexo de
+// las 23 preguntas pasa a un formato compacto de una sola línea de
+// resultado ("Respuesta registrada: X (Y%)"), igual al reporte de
+// referencia que preparó la coordinación académica.
+// Nota de diseño (sin cambios): jsPDF no permite embeber "Libre
+// Baskerville"/"DM Mono" sin cargar los archivos de fuente en base64, así
+// que se usan las fuentes nativas más parecidas ("times" como sustituto
+// serif, "courier" como sustituto mono), manteniendo la MISMA paleta de
+// colores (NAVY/NAVY_DARK/SLATE) del resto de la app.
 
-const LABELS_EF: Record<"ef1" | "ef2" | "ef3" | "ef4" | "ef5", string> = {
-  ef1: "EF1 · Seguimiento contenidos",
-  ef2: "EF2 · Mejora micro currículo",
-  ef3: "EF3 · Proceso difundido",
-  ef4: "EF4 · Difusión syllabus EVA",
-  ef5: "EF5 · Normativa institucional",
+type PdfDoc = InstanceType<typeof import("jspdf").default>;
+type RGB = [number, number, number];
+
+const EF_INFO: Record<"ef1" | "ef2" | "ef3" | "ef4" | "ef5", { titulo: string; descripcion: string; peso: number; fuente: string }> = {
+  ef1: { titulo: "EF1", descripcion: "Seguimiento de contenidos del syllabus", peso: 33, fuente: "Encuesta de heteroevaluación, syllabus y malla curricular" },
+  ef2: { titulo: "EF2", descripcion: "Mejora al micro currículo", peso: 27, fuente: "Documentos de planificación y actas de resolución" },
+  ef3: { titulo: "EF3", descripcion: "Proceso de seguimiento difundido", peso: 20, fuente: "EVA, informes y registros de difusión" },
+  ef4: { titulo: "EF4", descripcion: "Difusión del syllabus en el EVA", peso: 13, fuente: "EVA — carga y difusión del syllabus" },
+  ef5: { titulo: "EF5", descripcion: "Normativa institucional", peso: 7, fuente: "Reglamento interno de seguimiento" },
 };
 
 const EVIDENCIA_PDF_LABELS: Record<string, string> = {
-  acta_ajuste_curricular: "EF2 · Acta de Ajuste Curricular",
-  evidencia_difusion: "EF3 · Evidencia de Difusión",
-  reglamento_normativa: "EF5 · Reglamento / Normativa Institucional",
+  acta_ajuste_curricular: "Acta de Ajuste Curricular",
+  evidencia_difusion: "Evidencia de Difusión",
+  reglamento_normativa: "Reglamento / Normativa Institucional",
+};
+const EVIDENCIA_EF: Record<string, string> = {
+  acta_ajuste_curricular: "EF2",
+  evidencia_difusion: "EF3",
+  reglamento_normativa: "EF5",
 };
 
 const OPCIONES_LIKERT = ["Siempre", "Casi siempre", "Algunas veces", "Pocas veces", "Nunca"];
 
-function hexToRgb(hex: string): [number, number, number] {
+function hexToRgb(hex: string): RGB {
   const clean = hex.replace("#", "");
   const bigint = parseInt(clean, 16);
   return [(bigint >> 16) & 255, (bigint >> 8) & 255, bigint & 255];
 }
 
-function colorPorEscala(escala: string | null): [number, number, number] {
+function colorPorEscala(escala: string | null): RGB {
   switch (escala) {
     case "Satisfactorio": return [21, 128, 61];
     case "Cuasi Satisfactorio": return [202, 138, 4];
@@ -844,27 +845,165 @@ function colorPorEscala(escala: string | null): [number, number, number] {
   }
 }
 
+// Mismos cortes oficiales de CACES (≥0.75 / ≥0.50 / ≥0.25 / <0.25) para
+// colorear cada barra de EF de forma individual.
+function colorPorValor(valor: number | null): RGB {
+  if (valor === null) return [148, 163, 184];
+  if (valor >= 75) return [21, 128, 61];
+  if (valor >= 50) return [202, 138, 4];
+  if (valor >= 25) return [249, 115, 22];
+  return [239, 68, 68];
+}
+
+function opcionDominante(conteos: Record<string, number>, total: number): { label: string; pct: number } | null {
+  if (total <= 0) return null;
+  let mejorLabel = OPCIONES_LIKERT[0];
+  let mejorConteo = -1;
+  OPCIONES_LIKERT.forEach((op) => {
+    const c = conteos[op] ?? 0;
+    if (c > mejorConteo) { mejorConteo = c; mejorLabel = op; }
+  });
+  return { label: mejorLabel, pct: Math.round((mejorConteo / total) * 100) };
+}
+
+function polarPoint(cx: number, cy: number, r: number, angleDeg: number): [number, number] {
+  const rad = ((angleDeg - 90) * Math.PI) / 180;
+  return [cx + r * Math.cos(rad), cy + r * Math.sin(rad)];
+}
+
+function drawRingSegment(doc: PdfDoc, cx: number, cy: number, rOuter: number, rInner: number, startDeg: number, endDeg: number, rgb: RGB) {
+  if (endDeg <= startDeg) return;
+  doc.setFillColor(rgb[0], rgb[1], rgb[2]);
+  const step = 3;
+  for (let a = startDeg; a < endDeg; a += step) {
+    const a2 = Math.min(a + step, endDeg);
+    const [ox1, oy1] = polarPoint(cx, cy, rOuter, a);
+    const [ox2, oy2] = polarPoint(cx, cy, rOuter, a2);
+    const [ix1, iy1] = polarPoint(cx, cy, rInner, a);
+    const [ix2, iy2] = polarPoint(cx, cy, rInner, a2);
+    doc.triangle(ox1, oy1, ox2, oy2, ix1, iy1, "F");
+    doc.triangle(ox2, oy2, ix2, iy2, ix1, iy1, "F");
+  }
+}
+
+// Donut: pct 0-100, empieza arriba (12 en punto) y avanza en sentido horario.
+function drawDonut(doc: PdfDoc, cx: number, cy: number, rOuter: number, rInner: number, pct: number, colorRgb: RGB) {
+  const trackRgb: RGB = [226, 232, 240];
+  const sweep = Math.max(0, Math.min(100, pct)) * 3.6;
+  if (sweep < 360) drawRingSegment(doc, cx, cy, rOuter, rInner, sweep, 360, trackRgb);
+  if (sweep > 0) drawRingSegment(doc, cx, cy, rOuter, rInner, 0, sweep, colorRgb);
+}
+
+function drawBarraHorizontal(doc: PdfDoc, x: number, y: number, w: number, h: number, pct: number, colorRgb: RGB) {
+  doc.setFillColor(226, 232, 240);
+  doc.roundedRect(x, y, w, h, h / 2, h / 2, "F");
+  const anchoLleno = (w * Math.max(0, Math.min(100, pct))) / 100;
+  if (anchoLleno > 0.6) {
+    doc.setFillColor(colorRgb[0], colorRgb[1], colorRgb[2]);
+    doc.roundedRect(x, y, anchoLleno, h, h / 2, h / 2, "F");
+  }
+}
+
+function drawSectionHeader(doc: PdfDoc, titulo: string, subtitulo: string, x: number, y: number, contentW: number, navyDark: RGB, slate: RGB): number {
+  doc.setFont("times", "bold");
+  doc.setFontSize(12.5);
+  doc.setTextColor(navyDark[0], navyDark[1], navyDark[2]);
+  doc.text(titulo, x, y);
+  let yy = y + 4.5;
+  if (subtitulo) {
+    doc.setFont("times", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(slate[0], slate[1], slate[2]);
+    const lineas = doc.splitTextToSize(subtitulo, contentW);
+    doc.text(lineas, x, yy);
+    yy += lineas.length * 3.6 + 2;
+  }
+  return yy + 1.5;
+}
+
+// Tabla genérica con encabezado de color y filas alternadas. Mide el alto
+// real de cada fila (según el texto envuelto más largo de esa fila) ANTES
+// de dibujarla, y repite el encabezado si la fila cae en una página nueva.
+function dibujarTabla(
+  doc: PdfDoc, xStart: number, yStart: number,
+  columnas: { header: string; width: number }[],
+  filas: string[][],
+  colores: { navy: RGB; navyDark: RGB; slate: RGB },
+  pageH: number,
+): number {
+  const marginBottom = 15;
+  const headerH = 7.5;
+  const anchoTotal = columnas.reduce((s, c) => s + c.width, 0);
+  let y = yStart;
+
+  function dibujarEncabezado() {
+    doc.setFillColor(colores.navy[0], colores.navy[1], colores.navy[2]);
+    doc.rect(xStart, y, anchoTotal, headerH, "F");
+    doc.setFont("courier", "bold");
+    doc.setFontSize(7.5);
+    doc.setTextColor(255, 255, 255);
+    let cx = xStart;
+    columnas.forEach((col) => {
+      doc.text(col.header.toUpperCase(), cx + 2.5, y + 5);
+      cx += col.width;
+    });
+    y += headerH;
+  }
+
+  dibujarEncabezado();
+
+  filas.forEach((fila, i) => {
+    const lineasPorCelda = fila.map((texto, ci) => doc.splitTextToSize(texto || "—", columnas[ci].width - 5));
+    const maxLineas = Math.max(...lineasPorCelda.map((l: string[]) => l.length), 1);
+    const rowH = maxLineas * 4 + 3;
+
+    if (y + rowH > pageH - marginBottom) {
+      doc.addPage();
+      y = 15;
+      dibujarEncabezado();
+    }
+
+    if (i % 2 === 1) {
+      doc.setFillColor(248, 250, 253);
+      doc.rect(xStart, y, anchoTotal, rowH, "F");
+    }
+
+    doc.setFont("times", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(colores.navyDark[0], colores.navyDark[1], colores.navyDark[2]);
+    let cx = xStart;
+    fila.forEach((_texto, ci) => {
+      doc.text(lineasPorCelda[ci], cx + 2.5, y + 4.3);
+      cx += columnas[ci].width;
+    });
+    y += rowH;
+  });
+
+  doc.setDrawColor(226, 232, 240);
+  doc.line(xStart, y, xStart + anchoTotal, y);
+  return y;
+}
+
 function generarPdfAsignatura(jsPDF: typeof import("jspdf").default, params: {
   asignatura: Asignatura;
   cohorteActual: Cohorte | null;
   periodoActual: PeriodoAcademico | null;
   resultado: Resultado;
-  radarImg: string | null;
-  radarAspect: number;
   evidencias: Evidencia[];
   encuestaDetalle: EncuestaDetalle;
 }) {
-  const { asignatura, cohorteActual, periodoActual, resultado, radarImg, radarAspect, evidencias, encuestaDetalle } = params;
-  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const { asignatura, cohorteActual, periodoActual, resultado, evidencias, encuestaDetalle } = params;
+  const doc: PdfDoc = new jsPDF({ unit: "mm", format: "a4" });
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
   const marginX = 15;
+  const contentW = pageW - marginX * 2;
   let y = 0;
 
-  const [navyR, navyG, navyB] = hexToRgb(NAVY);
-  const [navyDarkR, navyDarkG, navyDarkB] = hexToRgb(NAVY_DARK);
-  const [slateR, slateG, slateB] = hexToRgb(SLATE);
-  const [defR, defG, defB] = [239, 68, 68]; // mismo rojo que "Deficiente", reutilizado para "Sin evidencia"
+  const navy = hexToRgb(NAVY);
+  const navyDark = hexToRgb(NAVY_DARK);
+  const slate = hexToRgb(SLATE);
+  const rojoSinEvidencia: RGB = [239, 68, 68];
 
   function checkPageBreak(alturaNecesaria: number) {
     if (y + alturaNecesaria > pageH - 15) {
@@ -874,186 +1013,252 @@ function generarPdfAsignatura(jsPDF: typeof import("jspdf").default, params: {
   }
 
   // ── Encabezado ──
-  doc.setFillColor(navyR, navyG, navyB);
-  doc.rect(0, 0, pageW, 32, "F");
-  doc.setTextColor(255, 255, 255);
+  const tituloLineas = doc.splitTextToSize(asignatura.nombre, contentW);
+  const alturaEncabezado = 20 + tituloLineas.length * 6.5;
+  doc.setFillColor(navy[0], navy[1], navy[2]);
+  doc.rect(0, 0, pageW, alturaEncabezado, "F");
+  doc.setFont("courier", "bold");
+  doc.setFontSize(7.5);
+  doc.setTextColor(190, 205, 225);
+  doc.text("INDICADOR 11.2 · CACES — SEGUIMIENTO DE SYLLABUS", marginX, 9);
   doc.setFont("times", "bold");
   doc.setFontSize(16);
-  doc.text(asignatura.nombre, marginX, 14);
-  doc.setFont("courier", "normal");
-  doc.setFontSize(9);
-  doc.text(`Docente: ${asignatura.docente || "—"}`, marginX, 21);
-  doc.text(
-    `Cohorte: ${cohorteActual?.nombre ?? "—"}   ·   PAO: ${periodoActual?.nombre ?? "—"}   ·   Generado: ${new Date().toLocaleString("es-EC")}`,
-    marginX, 27,
-  );
-  y = 40;
-
-  // ── Resumen general ──
-  doc.setFont("times", "bold");
-  doc.setFontSize(12);
-  doc.setTextColor(navyDarkR, navyDarkG, navyDarkB);
-  doc.text("Resumen general", marginX, y);
-  y += 4;
-
-  const [escR, escG, escB] = colorPorEscala(resultado.escala);
-  doc.setFillColor(escR, escG, escB);
-  doc.roundedRect(marginX, y, 55, 16, 2, 2, "F");
   doc.setTextColor(255, 255, 255);
-  doc.setFont("courier", "bold");
-  doc.setFontSize(13);
-  const textoResultado = resultado.resultado_final === null ? "Sin datos" : `${resultado.resultado_final}%${resultado.estado_general !== "completo" ? " (parcial)" : ""}`;
-  doc.text(textoResultado, marginX + 27.5, y + 7, { align: "center" });
-  doc.setFontSize(8);
-  doc.text(resultado.escala ?? "Falta evidencia", marginX + 27.5, y + 12.5, { align: "center" });
+  doc.text(tituloLineas, marginX, 18);
+  y = alturaEncabezado + 9;
 
-  let alturaBloqueRadar = 22; // fallback si no hay imagen (mismo valor que antes)
-  if (radarImg) {
-    const imgW = 52;
-    const imgH = imgW / radarAspect;
-    doc.addImage(radarImg, "PNG", pageW - marginX - imgW, y - 3, imgW, imgH);
-    alturaBloqueRadar = Math.max(22, imgH + 4);
-  }
-  y += alturaBloqueRadar;
-
-  const efRows: { label: string; valor: number | null; estado: "ok" | "sin_datos" }[] = [
-    { label: LABELS_EF.ef1, valor: resultado.ef1, estado: resultado.ef1_estado },
-    { label: LABELS_EF.ef2, valor: resultado.ef2, estado: resultado.ef2_estado },
-    { label: LABELS_EF.ef3, valor: resultado.ef3, estado: resultado.ef3_estado },
-    { label: LABELS_EF.ef4, valor: resultado.ef4, estado: resultado.ef4_estado },
-    { label: LABELS_EF.ef5, valor: resultado.ef5, estado: resultado.ef5_estado },
+  // Fila de metadatos (DOCENTE / COHORTE / PAO / GENERADO)
+  const metaColW = contentW / 4;
+  const meta: [string, string][] = [
+    ["DOCENTE", asignatura.docente || "—"],
+    ["COHORTE", cohorteActual?.nombre ?? "—"],
+    ["PAO", periodoActual?.nombre ?? "—"],
+    ["GENERADO", new Date().toLocaleString("es-EC", { day: "2-digit", month: "long", year: "numeric", hour: "numeric", minute: "2-digit" })],
   ];
-  doc.setFontSize(9);
-  efRows.forEach((row) => {
-    doc.setFont("courier", "normal");
-    doc.setTextColor(slateR, slateG, slateB);
-    doc.text(row.label, marginX, y);
+  meta.forEach(([label, valor], i) => {
+    const mx = marginX + i * metaColW;
     doc.setFont("courier", "bold");
-    doc.setTextColor(navyDarkR, navyDarkG, navyDarkB);
-    const texto = row.estado === "sin_datos" || row.valor === null ? "Sin datos" : `${row.valor}%`;
-    doc.text(texto, marginX + 95, y);
-    y += 6;
+    doc.setFontSize(7);
+    doc.setTextColor(slate[0], slate[1], slate[2]);
+    doc.text(label, mx, y);
+    doc.setFont("times", "bold");
+    doc.setFontSize(9.5);
+    doc.setTextColor(navyDark[0], navyDark[1], navyDark[2]);
+    const lineasValor = doc.splitTextToSize(valor, metaColW - 4);
+    doc.text(lineasValor, mx, y + 5);
   });
-  y += 4;
+  y += 16;
+
+  // ── Resumen general (donut + barras por EF) ──
+  y = drawSectionHeader(
+    doc, "Resultado general",
+    "Puntaje agregado del indicador y desempeño individual de cada Elemento Fundamental (EF), ponderado según el modelo oficial de evaluación CACES.",
+    marginX, y, contentW, navyDark, slate,
+  );
+
+  const bloqueAltura = 46;
+  checkPageBreak(bloqueAltura);
+  const yBloque = y;
+
+  // Donut a la izquierda
+  const donutCx = marginX + 26;
+  const donutCy = yBloque + bloqueAltura / 2 - 2;
+  const colorEscala = colorPorEscala(resultado.escala);
+  if (resultado.resultado_final !== null) {
+    drawDonut(doc, donutCx, donutCy, 20, 13, resultado.resultado_final, colorEscala);
+    doc.setFont("courier", "bold");
+    doc.setFontSize(15);
+    doc.setTextColor(navyDark[0], navyDark[1], navyDark[2]);
+    doc.text(`${resultado.resultado_final}%`, donutCx, donutCy + 2, { align: "center" });
+  } else {
+    drawDonut(doc, donutCx, donutCy, 20, 13, 0, [148, 163, 184]);
+    doc.setFont("courier", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(148, 163, 184);
+    doc.text("Sin datos", donutCx, donutCy + 1.5, { align: "center" });
+  }
+  doc.setFont("times", "bold");
+  doc.setFontSize(9.5);
+  doc.setTextColor(colorEscala[0], colorEscala[1], colorEscala[2]);
+  doc.text(resultado.escala ?? "Falta evidencia", donutCx, donutCy + 27, { align: "center" });
+
+  // Filas de EF a la derecha
+  const efKeys: ("ef1" | "ef2" | "ef3" | "ef4" | "ef5")[] = ["ef1", "ef2", "ef3", "ef4", "ef5"];
+  const efColX = marginX + 58;
+  const efColW = contentW - 58;
+  const textW = efColW * 0.55;
+  const barX = efColX + textW + 3;
+  const barW = efColW - textW - 3 - 15;
+  const pctX = barX + barW + 3;
+  const rowH = bloqueAltura / 5;
+
+  efKeys.forEach((key, i) => {
+    const info = EF_INFO[key];
+    const valor = resultado[key];
+    const ry = yBloque + i * rowH;
+    const colorBarra = colorPorValor(valor);
+
+    doc.setFont("times", "bold");
+    doc.setFontSize(8.5);
+    doc.setTextColor(navyDark[0], navyDark[1], navyDark[2]);
+    doc.text(`${info.titulo}  ${info.descripcion}`, efColX, ry + 4.5);
+    doc.setFont("courier", "normal");
+    doc.setFontSize(6.5);
+    doc.setTextColor(slate[0], slate[1], slate[2]);
+    doc.text(`peso ${info.peso}% del indicador`, efColX, ry + 8.3);
+
+    const barY = ry + 3;
+    drawBarraHorizontal(doc, barX, barY, barW, 3, valor ?? 0, colorBarra);
+    doc.setFont("courier", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(colorBarra[0], colorBarra[1], colorBarra[2]);
+    doc.text(valor === null ? "—" : `${valor}%`, pctX, barY + 2.6);
+  });
+  y = yBloque + bloqueAltura + 4;
+
+  // Nota metodológica
+  checkPageBreak(20);
+  const notaTexto =
+    "Nota metodológica — este porcentaje es un proxy continuo de gestión interna que la carrera usa para prepararse antes de la visita del Comité Externo. El procedimiento oficial de CACES categoriza cada EF de forma discreta (Satisfactorio / Cuasi satisfactorio / Poco satisfactorio / Deficiente) mediante juicio de un evaluador humano sobre la evidencia presentada.";
+  const notaLineas = doc.splitTextToSize(notaTexto, contentW - 8);
+  const notaAltura = notaLineas.length * 3.6 + 6;
+  doc.setFillColor(248, 250, 253);
+  doc.setDrawColor(226, 232, 240);
+  doc.roundedRect(marginX, y, contentW, notaAltura, 2, 2, "FD");
+  doc.setFont("times", "normal");
+  doc.setFontSize(7.5);
+  doc.setTextColor(slate[0], slate[1], slate[2]);
+  doc.text(notaLineas, marginX + 4, y + 5);
+  y += notaAltura + 8;
+
+  // ── Fuentes de evidencia por elemento ──
+  checkPageBreak(20);
+  y = drawSectionHeader(doc, "Fuentes de evidencia por elemento", "Origen de la información que sustenta el resultado de cada Elemento Fundamental.", marginX, y, contentW, navyDark, slate);
+  const filasFuentes = efKeys.map((key) => {
+    const info = EF_INFO[key];
+    const valor = resultado[key];
+    return [info.titulo, info.descripcion, info.fuente, valor === null ? "Sin datos" : `${valor}%`];
+  });
+  y = dibujarTabla(
+    doc, marginX, y,
+    [
+      { header: "EF", width: 12 },
+      { header: "Elemento fundamental", width: 48 },
+      { header: "Fuente de evidencia", width: 85 },
+      { header: "Resultado", width: contentW - 12 - 48 - 85 },
+    ],
+    filasFuentes,
+    { navy, navyDark, slate },
+    pageH,
+  );
+  y += 10;
 
   // ── Detalle de encuesta (EF1 y EF4) ──
   checkPageBreak(20);
-  doc.setFont("times", "bold");
-  doc.setFontSize(12);
-  doc.setTextColor(navyDarkR, navyDarkG, navyDarkB);
-  doc.text("Detalle de encuesta — EF1 y EF4", marginX, y);
-  y += 3;
-  doc.setFont("courier", "normal");
-  doc.setFontSize(7.5);
-  doc.setTextColor(slateR, slateG, slateB);
-  doc.text(`Respuestas consideradas para esta asignatura: ${encuestaDetalle.respuestas_totales_materia}`, marginX, y);
-  y += 7;
+  y = drawSectionHeader(
+    doc, "Detalle de la encuesta de heteroevaluación",
+    `Preguntas que alimentan EF1 y EF4 · respuestas consideradas para esta asignatura: ${encuestaDetalle.respuestas_totales_materia}.`,
+    marginX, y, contentW, navyDark, slate,
+  );
 
   const preguntasEF = encuestaDetalle.preguntas.filter((p) => p.es_ef1 || p.es_ef4);
   preguntasEF.forEach((p) => {
-    checkPageBreak(26);
+    const textoPregunta = p.texto ?? "(pregunta no encontrada en la encuesta actual)";
+    const lineasTexto = doc.splitTextToSize(textoPregunta, contentW);
+    const resumenConteo = p.total > 0
+      ? OPCIONES_LIKERT.map((op) => `${op}: ${p.conteos[op] ?? 0} (${Math.round(((p.conteos[op] ?? 0) / p.total) * 100)}%)`).join("  ·  ")
+      : "Sin respuestas para esta materia";
+    const lineasConteo = doc.splitTextToSize(resumenConteo, contentW);
+    const alturaBloque = 5 + lineasTexto.length * 4.2 + 2 + lineasConteo.length * 3.8 + 5;
+
+    checkPageBreak(alturaBloque);
     doc.setFont("courier", "bold");
-    doc.setFontSize(9);
-    doc.setTextColor(navyR, navyG, navyB);
-    doc.text(`P${p.numero} (${p.es_ef1 ? "EF1" : "EF4"})`, marginX, y);
+    doc.setFontSize(8.5);
+    doc.setTextColor(navy[0], navy[1], navy[2]);
+    doc.text(`P${p.numero}  ${p.es_ef1 ? "EF1" : "EF4"}`, marginX, y);
     y += 5;
 
     doc.setFont("times", "normal");
     doc.setFontSize(9);
-    doc.setTextColor(navyDarkR, navyDarkG, navyDarkB);
-    const lineasTexto = doc.splitTextToSize(
-      p.texto ?? "(pregunta no encontrada en la encuesta actual)",
-      pageW - marginX * 2,
-    );
+    doc.setTextColor(navyDark[0], navyDark[1], navyDark[2]);
     doc.text(lineasTexto, marginX, y);
     y += lineasTexto.length * 4.2 + 2;
 
     doc.setFont("courier", "normal");
-    doc.setFontSize(8);
-    doc.setTextColor(slateR, slateG, slateB);
-    const resumenConteo = p.total > 0
-      ? OPCIONES_LIKERT.map((op) => `${op}: ${p.conteos[op] ?? 0} (${Math.round(((p.conteos[op] ?? 0) / p.total) * 100)}%)`).join("   ·   ")
-      : "Sin respuestas para esta materia";
-    const lineasConteo = doc.splitTextToSize(resumenConteo, pageW - marginX * 2);
+    doc.setFontSize(7.5);
+    doc.setTextColor(slate[0], slate[1], slate[2]);
     doc.text(lineasConteo, marginX, y);
-    y += lineasConteo.length * 4 + 6;
+    y += lineasConteo.length * 3.8 + 5;
   });
+  y += 4;
 
   // ── Evidencia documental (EF2, EF3, EF5) ──
   checkPageBreak(20);
-  doc.setFont("times", "bold");
-  doc.setFontSize(12);
-  doc.setTextColor(navyDarkR, navyDarkG, navyDarkB);
-  doc.text("Evidencia documental — EF2, EF3 y EF5", marginX, y);
-  y += 8;
-
-  (Object.keys(EVIDENCIA_PDF_LABELS) as (keyof typeof EVIDENCIA_PDF_LABELS)[]).forEach((tipo) => {
-    checkPageBreak(15);
+  y = drawSectionHeader(doc, "Evidencia documental", "Archivos que sustentan EF2, EF3 y EF5.", marginX, y, contentW, navyDark, slate);
+  const filasEvidencia = (Object.keys(EVIDENCIA_PDF_LABELS) as (keyof typeof EVIDENCIA_PDF_LABELS)[]).map((tipo) => {
     const ev = evidencias.find((e) => e.tipo === tipo && e.vigente);
-    doc.setFont("courier", "bold");
-    doc.setFontSize(9);
-    doc.setTextColor(navyR, navyG, navyB);
-    doc.text(EVIDENCIA_PDF_LABELS[tipo], marginX, y);
-    y += 5;
-    doc.setFont("times", "normal");
-    doc.setFontSize(9);
-    if (ev) {
-      doc.setTextColor(navyDarkR, navyDarkG, navyDarkB);
-      doc.text(`Archivo: ${ev.archivo_nombre ?? "—"}`, marginX, y);
-      y += 4.5;
-      doc.text(
-        `Subido: ${new Date(ev.fecha_subida).toLocaleDateString("es-EC")}   ·   Por: ${ev.subido_por || "—"}`,
-        marginX, y,
-      );
-      y += 8;
-    } else {
-      doc.setTextColor(defR, defG, defB);
-      doc.text("Sin evidencia subida", marginX, y);
-      y += 8;
-    }
+    return [
+      EVIDENCIA_EF[tipo],
+      EVIDENCIA_PDF_LABELS[tipo],
+      ev ? (ev.archivo_nombre ?? "—") : "Sin evidencia subida",
+      ev ? new Date(ev.fecha_subida).toLocaleDateString("es-EC") : "—",
+      ev ? (ev.subido_por || "—") : "—",
+    ];
   });
+  y = dibujarTabla(
+    doc, marginX, y,
+    [
+      { header: "EF", width: 12 },
+      { header: "Tipo de evidencia", width: 48 },
+      { header: "Archivo", width: 70 },
+      { header: "Subido", width: 25 },
+      { header: "Responsable", width: contentW - 12 - 48 - 70 - 25 },
+    ],
+    filasEvidencia,
+    { navy, navyDark, slate },
+    pageH,
+  );
 
-  // ── Anexo: las 23 preguntas completas ──
+  // ── Anexo: las 23 preguntas, formato compacto ──
   doc.addPage();
   y = 15;
-  doc.setFont("times", "bold");
-  doc.setFontSize(12);
-  doc.setTextColor(navyDarkR, navyDarkG, navyDarkB);
-  doc.text("Anexo — Las 23 preguntas de la encuesta de heteroevaluación", marginX, y);
-  y += 8;
+  y = drawSectionHeader(
+    doc, "Anexo — Las 23 preguntas de la encuesta de heteroevaluación",
+    "Distribución de respuestas por pregunta. Las preguntas marcadas con EF alimentan directamente el cálculo del indicador.",
+    marginX, y, contentW, navyDark, slate,
+  );
 
   encuestaDetalle.preguntas.forEach((p) => {
-    checkPageBreak(20);
+    const marcador = p.es_ef1 ? "  EF1" : p.es_ef4 ? "  EF4" : "";
+    const textoPregunta = p.texto ?? "(pregunta no encontrada en la encuesta actual)";
+    const lineasTexto = doc.splitTextToSize(textoPregunta, contentW);
+    const dom = opcionDominante(p.conteos, p.total);
+    const lineaResultado = dom ? `Respuesta registrada: ${dom.label} (${dom.pct}%)` : "Sin respuestas para esta materia";
+    const alturaBloque = 4 + lineasTexto.length * 3.9 + 4.5 + 4;
+
+    checkPageBreak(alturaBloque);
     doc.setFont("courier", "bold");
-    doc.setFontSize(8.5);
-    doc.setTextColor(navyR, navyG, navyB);
-    const marcador = p.es_ef1 ? " (EF1)" : p.es_ef4 ? " (EF4)" : "";
+    doc.setFontSize(8);
+    doc.setTextColor(navy[0], navy[1], navy[2]);
     doc.text(`P${p.numero}${marcador}`, marginX, y);
     y += 4;
 
     doc.setFont("times", "normal");
     doc.setFontSize(8.5);
-    doc.setTextColor(navyDarkR, navyDarkG, navyDarkB);
-    const lineasTexto = doc.splitTextToSize(
-      p.texto ?? "(pregunta no encontrada en la encuesta actual)",
-      pageW - marginX * 2,
-    );
+    doc.setTextColor(navyDark[0], navyDark[1], navyDark[2]);
     doc.text(lineasTexto, marginX, y);
-    y += lineasTexto.length * 3.8 + 1;
+    y += lineasTexto.length * 3.9;
 
     doc.setFont("courier", "normal");
     doc.setFontSize(7.5);
-    doc.setTextColor(slateR, slateG, slateB);
-    const resumenConteo = p.total > 0
-      ? OPCIONES_LIKERT.map((op) => `${op}: ${p.conteos[op] ?? 0}`).join("  ·  ")
-      : "Sin respuestas para esta materia";
-    const lineasConteo = doc.splitTextToSize(resumenConteo, pageW - marginX * 2);
-    doc.text(lineasConteo, marginX, y);
-    y += lineasConteo.length * 3.6 + 4;
+    doc.setTextColor(dom ? slate[0] : rojoSinEvidencia[0], dom ? slate[1] : rojoSinEvidencia[1], dom ? slate[2] : rojoSinEvidencia[2]);
+    doc.text(lineaResultado, marginX, y + 3.5);
+    y += 4 + 4;
   });
 
   doc.save(`indicador_11.2_${asignatura.nombre.replace(/\s+/g, "_")}.pdf`);
 }
+
 
 // ── Tab: Evidencias (diseño original de Figma: fuentes + vista previa) ────
 const TIPOS: { value: Evidencia["tipo"]; label: string }[] = [
