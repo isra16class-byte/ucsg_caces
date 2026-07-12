@@ -3,17 +3,22 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
+from django.db import models
 
-from .models import Cohorte, Asignatura, Evidencia, PreguntaEncuesta, RespuestaEncuesta
+from .models import Carrera, Cohorte, PeriodoAcademico, Asignatura, Evidencia
 from .serializers import (
-    CohorteSerializer, AsignaturaSerializer, EvidenciaSerializer,
-    PreguntaEncuestaSerializer, RespuestaEncuestaSerializer,
+    CarreraSerializer,
+    CohorteSerializer,
+    PeriodoAcademicoSerializer,
+    AsignaturaSerializer,
+    EvidenciaSerializer,
 )
 # Reutilizamos la lógica de negocio centralizada en views.py; no se duplica.
 from .views import (  # noqa: F401
-    _calcular_ef_desde_csv, _buscar_columna,
+    _calcular_ef_desde_csv,
     calcular_resultado_asignatura, calcular_resultado_general,
     obtener_materias_disponibles,
+    obtener_detalle_encuesta,
 )
 
 
@@ -25,11 +30,61 @@ def api_cohortes(request):
         nombre = request.data.get('nombre')
         if not nombre:
             return Response({'error': 'El campo "nombre" es requerido.'}, status=status.HTTP_400_BAD_REQUEST)
-        cohorte = Cohorte.objects.create(nombre=nombre)
+
+        # Cohorte.carrera ahora es obligatorio (ver Carrera en models.py).
+        # El frontend actual no manda "carrera_id" todavía (solo se trabaja
+        # con "Desarrollo de Software"), así que si no viene, se usa esa
+        # carrera por default en vez de romper la creación — cuando se
+        # agreguen más carreras, el frontend puede empezar a mandar
+        # "carrera_id" sin necesitar otro cambio de backend.
+        carrera_id = request.data.get('carrera_id') or request.data.get('carrera')
+        if carrera_id:
+            carrera = get_object_or_404(Carrera, id=carrera_id)
+        else:
+            carrera, _ = Carrera.objects.get_or_create(nombre='Desarrollo de Software')
+
+        cohorte = Cohorte.objects.create(nombre=nombre, carrera=carrera)
         return Response(CohorteSerializer(cohorte).data, status=status.HTTP_201_CREATED)
 
-    cohortes = Cohorte.objects.all()
-    return Response(CohorteSerializer(cohortes, many=True).data)
+    cohortes_qs = Cohorte.objects.all()
+    carrera_id = request.GET.get('carrera')
+    if carrera_id:
+        cohortes_qs = cohortes_qs.filter(carrera_id=carrera_id)
+    return Response(CohorteSerializer(cohortes_qs, many=True).data)
+
+
+# ---------- Carreras ----------
+
+@api_view(['GET'])
+def api_carreras(request):
+    """
+    Lista las Carrera existentes. Hoy solo va a devolver 1 fila
+    ("Desarrollo de Software"), pero el endpoint ya existe para cuando se
+    agreguen las demás carreras del TEC (no hace falta otra migración de
+    API para eso, solo empezar a poblar más filas).
+    """
+    carreras = Carrera.objects.all()
+    return Response(CarreraSerializer(carreras, many=True).data)
+
+
+# ---------- Periodos académicos ----------
+
+@api_view(['GET'])
+def api_periodos(request):
+    cohorte_id = request.GET.get('cohorte')
+    periodos_qs = PeriodoAcademico.objects.all()
+    if cohorte_id:
+        periodos_qs = periodos_qs.filter(cohorte_id=cohorte_id)
+    return Response(PeriodoAcademicoSerializer(periodos_qs, many=True).data)
+
+
+def _obtener_periodo_por_cohorte(cohorte):
+    periodo, _ = PeriodoAcademico.objects.get_or_create(
+        cohorte=cohorte,
+        nombre='PAO 1',
+        defaults={'orden': 1},
+    )
+    return periodo
 
 
 # ---------- Asignaturas ----------
@@ -38,23 +93,38 @@ def api_cohortes(request):
 def api_asignaturas(request):
     if request.method == 'POST':
         nombre = request.data.get('nombre')
+        periodo_id = request.data.get('periodo_id') or request.data.get('periodo')
         cohorte_id = request.data.get('cohorte_id') or request.data.get('cohorte')
         docente = request.data.get('docente', '')
 
-        if not (nombre and cohorte_id):
+        if not nombre:
             return Response(
-                {'error': 'Se requieren "nombre" y "cohorte_id".'},
+                {'error': 'Se requiere el campo "nombre".'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        cohorte = get_object_or_404(Cohorte, id=cohorte_id)
-        asignatura = Asignatura.objects.create(cohorte=cohorte, nombre=nombre, docente=docente)
+        periodo = None
+        if periodo_id:
+            periodo = get_object_or_404(PeriodoAcademico, id=periodo_id)
+        elif cohorte_id:
+            cohorte = get_object_or_404(Cohorte, id=cohorte_id)
+            periodo = _obtener_periodo_por_cohorte(cohorte)
+        else:
+            return Response(
+                {'error': 'Se requiere "periodo_id" o "cohorte_id".'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        asignatura = Asignatura.objects.create(periodo_academico=periodo, nombre=nombre, docente=docente)
         return Response(AsignaturaSerializer(asignatura).data, status=status.HTTP_201_CREATED)
 
     cohorte_id = request.GET.get('cohorte')
+    periodo_id = request.GET.get('periodo')
     asignaturas_qs = Asignatura.objects.all()
+    if periodo_id:
+        asignaturas_qs = asignaturas_qs.filter(periodo_academico_id=periodo_id)
     if cohorte_id:
-        asignaturas_qs = asignaturas_qs.filter(cohorte_id=cohorte_id)
+        asignaturas_qs = asignaturas_qs.filter(periodo_academico__cohorte_id=cohorte_id)
 
     return Response(AsignaturaSerializer(asignaturas_qs, many=True).data)
 
@@ -76,26 +146,81 @@ def api_materias_encuesta(request):
 def api_evidencias(request):
     if request.method == 'POST':
         tipo = request.data.get('tipo')
-        archivo = request.FILES.get('archivo')
-        asignatura_id = request.data.get('asignatura_id') or request.data.get('asignatura')
+        data = request.data.copy()
 
-        if not (tipo and archivo and asignatura_id):
+        # El frontend SIEMPRE manda "asignatura" (la que tiene seleccionada
+        # en pantalla), sin importar el nivel real del tipo de evidencia —
+        # el backend deriva desde ahí tanto el PeriodoAcademico como la
+        # Carrera (asignatura -> periodo_academico -> cohorte -> carrera),
+        # así el flujo de subida en la UI no cambia aunque el nivel de un
+        # tipo de evidencia cambie en el futuro.
+        asignatura_id = data.get('asignatura_id') or data.get('asignatura')
+        if not asignatura_id:
             return Response(
-                {'error': 'Se requieren "tipo", "archivo" y "asignatura_id".'},
+                {'error': 'Se requiere "asignatura_id".'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         asignatura = get_object_or_404(Asignatura, id=asignatura_id)
-        evidencia = Evidencia.objects.create(asignatura=asignatura, tipo=tipo, archivo=archivo)
-        return Response(
-            EvidenciaSerializer(evidencia, context={'request': request}).data,
-            status=status.HTTP_201_CREATED,
-        )
+        carrera_id = asignatura.periodo_academico.cohorte.carrera_id
+
+        data.pop('asignatura', None)
+        data.pop('asignatura_id', None)
+        data.pop('periodo_academico', None)
+        data.pop('periodo_id', None)
+        data.pop('carrera', None)
+
+        if tipo in Evidencia.TIPOS_POR_CARRERA:
+            # malla_curricular / reglamento_normativa (EF5): evidencia de
+            # TODA la carrera — se guarda sin asignatura ni periodo.
+            data['carrera'] = str(carrera_id)
+        elif tipo in Evidencia.TIPOS_POR_PERIODO:
+            # Hoy ningún tipo cae acá (ver TIPOS_POR_PERIODO en models.py),
+            # se deja implementado por si a futuro EF4 suma evidencia
+            # documental propia de nivel PAO.
+            data['periodo_academico'] = str(asignatura.periodo_academico_id)
+        else:
+            # syllabus / acta_retroalimentacion / acta_ajuste_curricular
+            # (EF2) / evidencia_difusion (EF3): nivel asignatura, sin cambios.
+            data['asignatura'] = str(asignatura.id)
+
+        serializer = EvidenciaSerializer(data=data, context={'request': request})
+        if serializer.is_valid():
+            # IMPORTANTE: forzamos vigente=True explícitamente en save().
+            # Motivo: el frontend sube evidencia como multipart/form-data (FormData)
+            # y nunca manda el campo "vigente". Django REST Framework trata los
+            # BooleanField de datos tipo formulario HTML con su propio
+            # "default_empty_html", que para BooleanField es False (misma lógica
+            # que un checkbox sin marcar) — NO usa el default=True del modelo.
+            # Sin este override, toda evidencia nueva quedaba guardada con
+            # vigente=False, y como _calcular_resultado_generico() en views.py
+            # filtra evidencias_qs.filter(vigente=True), esas evidencias nunca se
+            # contaban para EF2/EF3/EF5. Por eso "Resultados" nunca reflejaba las
+            # evidencias recién subidas, aunque en la pestaña "Evidencias" sí se
+            # vieran como "Cargado ✓" (esa vista no filtra por vigente).
+            serializer.save(vigente=True)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     asignatura_id = request.GET.get('asignatura')
+    periodo_id = request.GET.get('periodo')
     evidencias_qs = Evidencia.objects.all()
+
     if asignatura_id:
-        evidencias_qs = evidencias_qs.filter(asignatura_id=asignatura_id)
+        # Devolvemos la unión: evidencia propia de la asignatura (syllabus,
+        # acta_retroalimentacion, acta_ajuste_curricular EF2, evidencia_difusion
+        # EF3) + evidencia de la CARRERA a la que pertenece esa asignatura
+        # (malla_curricular, reglamento_normativa EF5), derivada de la misma
+        # cadena asignatura -> periodo_academico -> cohorte -> carrera — así
+        # la pestaña Evidencias muestra ambas sin que el frontend tenga que
+        # pedir 2 veces.
+        asignatura = get_object_or_404(Asignatura, id=asignatura_id)
+        carrera_id = asignatura.periodo_academico.cohorte.carrera_id
+        evidencias_qs = evidencias_qs.filter(
+            models.Q(asignatura_id=asignatura_id) |
+            models.Q(carrera_id=carrera_id, tipo__in=Evidencia.TIPOS_POR_CARRERA)
+        )
+    elif periodo_id:
+        evidencias_qs = evidencias_qs.filter(periodo_academico_id=periodo_id)
 
     return Response({
         'total': evidencias_qs.count(),
@@ -123,16 +248,29 @@ def api_resultado(request):
 @api_view(['GET'])
 def api_resultado_cohorte(request):
     cohorte_id = request.GET.get('cohorte')
-    if not cohorte_id:
-        return Response({'error': 'Se requiere el parámetro "cohorte".'}, status=status.HTTP_400_BAD_REQUEST)
+    periodo_id = request.GET.get('periodo')
 
-    cohorte = get_object_or_404(Cohorte, id=cohorte_id)
-    resultado = calcular_resultado_general(cohorte)
+    periodo = None
+    if periodo_id:
+        periodo = get_object_or_404(PeriodoAcademico, id=periodo_id)
+        if cohorte_id and str(periodo.cohorte_id) != str(cohorte_id):
+            return Response({'error': 'El período no pertenece a la cohorte indicada.'}, status=status.HTTP_400_BAD_REQUEST)
+        cohorte = periodo.cohorte
+    else:
+        if not cohorte_id:
+            return Response({'error': 'Se requiere el parámetro "cohorte".'}, status=status.HTTP_400_BAD_REQUEST)
+        cohorte = get_object_or_404(Cohorte, id=cohorte_id)
+
+    resultado = calcular_resultado_general(cohorte, periodo=periodo)
     resultado['cohorte'] = CohorteSerializer(cohorte).data
+    if periodo:
+        resultado['periodo'] = PeriodoAcademicoSerializer(periodo).data
 
     # Además, incluimos el detalle por asignatura (útil para la lista lateral
     # del frontend, mostrando el % de cada una junto al general).
-    asignaturas = Asignatura.objects.filter(cohorte=cohorte)
+    asignaturas = Asignatura.objects.filter(periodo_academico__cohorte=cohorte)
+    if periodo:
+        asignaturas = asignaturas.filter(periodo_academico=periodo)
     detalle_asignaturas = []
     for asignatura in asignaturas:
         r = calcular_resultado_asignatura(asignatura)
@@ -151,14 +289,13 @@ def api_resultado_cohorte(request):
 
 @api_view(['GET'])
 def api_encuesta(request):
-    preguntas = PreguntaEncuesta.objects.all().order_by('orden')
     cohorte_id = request.GET.get('cohorte')
     cohorte_actual = None
     if cohorte_id:
         cohorte_actual = get_object_or_404(Cohorte, id=cohorte_id)
 
     return Response({
-        'preguntas': PreguntaEncuestaSerializer(preguntas, many=True).data,
+        'preguntas': [],
         'cohorte_actual': CohorteSerializer(cohorte_actual).data if cohorte_actual else None,
     })
 
@@ -170,6 +307,30 @@ def api_encuesta_resultados(request):
     if datos is None:
         return Response({'error': 'No se pudo conectar con Google Sheets.'}, status=503)
     return Response(datos)
+
+
+# ---------- Detalle de encuesta por asignatura (Entrega 3 - Exportación PDF) ----------
+
+@api_view(['GET'])
+def api_encuesta_detalle(request):
+    """
+    Devuelve, para las 23 preguntas de la encuesta de heteroevaluación, el
+    texto completo y el desglose de respuestas (conteo por opción),
+    filtrado por la materia de la asignatura indicada. Usado por el PDF
+    (secciones "Detalle de encuesta" y "Anexo") para no depender de texto
+    hardcodeado en el frontend.
+    """
+    asignatura_id = request.GET.get('asignatura')
+    if not asignatura_id:
+        return Response({'error': 'Se requiere el parámetro "asignatura".'}, status=status.HTTP_400_BAD_REQUEST)
+
+    asignatura = get_object_or_404(Asignatura, id=asignatura_id)
+    detalle = obtener_detalle_encuesta(materia=asignatura.nombre)
+    if detalle is None:
+        return Response({'error': 'No se pudo conectar con Google Sheets.'}, status=503)
+
+    detalle['asignatura'] = asignatura.id
+    return Response(detalle)
 
 
 # ---------- Ficha técnica ----------
