@@ -23,6 +23,13 @@ SharePoint — la documentación de Microsoft aclara que **"embed" solo está
 soportado en OneDrive personal (consumidor)**, no en cuentas
 institucionales. Por eso acá se usa "view", que sí es válido para
 OneDrive for Business con scope "anonymous".
+
+También incluye `descargar_contenido()`, usada por el endpoint proxy de
+vista previa (api_views.evidencia_archivo) para servir el archivo desde
+nuestro propio backend y evitar el Content-Security-Policy que Microsoft
+impone sobre sus propias páginas (bloquea el <iframe> apuntando directo a
+onedrive_url). El link público "view"/anonymous sigue siendo el que usa
+el botón "Abrir documento" del frontend — no cambia.
 """
 import mimetypes
 
@@ -226,6 +233,63 @@ def _crear_link_publico(item_id: str, token: str) -> str:
             f"link público: {resp.json()}"
         )
     return link_url
+
+
+def descargar_contenido(item_id: str):
+    """
+    Descarga el contenido de un archivo ya subido a OneDrive, para servirlo
+    en modo streaming desde nuestro propio backend (proxy same-origin).
+
+    Motivación: el <iframe> de vista previa del frontend, apuntando
+    directo a onedrive_url (el link público de Microsoft), queda
+    bloqueado por el Content-Security-Policy (frame-ancestors) que
+    Microsoft impone en sus propias páginas de SharePoint/OneDrive — eso
+    es una restricción de la plataforma de Microsoft, no de este backend,
+    y no se puede desactivar desde acá. La solución es NO embeber la
+    página de Microsoft directamente, sino traer los bytes del archivo a
+    través de este backend y servirlos nosotros mismos (mismo origen que
+    el resto de la API), donde no aplica el CSP de Microsoft.
+
+    Devuelve una tupla (respuesta_streaming, content_type):
+      - respuesta_streaming: objeto requests.Response con stream=True,
+        para que el caller haga streaming del contenido con
+        .iter_content() sin cargar el archivo completo en memoria (los
+        .mp4 pueden ser grandes).
+      - content_type: el Content-Type que reportó Graph API para el
+        archivo, o "application/octet-stream" si no lo informó.
+
+    IMPORTANTE: el caller es responsable de cerrar la respuesta streaming
+    (o dejar que Django/StreamingHttpResponse la consuma por completo) —
+    no se cierra acá porque el streaming ocurre después de este return.
+
+    Lanza:
+      - OneDriveNoConfiguradoError si faltan credenciales en el entorno.
+      - OneDriveAuthError si Graph API rechaza la autenticación.
+      - OneDriveUploadError si Graph API rechaza la descarga (ej. el
+        item_id ya no existe en OneDrive).
+    """
+    token = _obtener_token()  # levanta OneDriveNoConfiguradoError / OneDriveAuthError
+
+    url = f"{GRAPH_BASE_URL}/drives/{settings.ONEDRIVE_DRIVE_ID}/items/{item_id}/content"
+    # stream=True: no se descarga todo a memoria acá, el caller hace el
+    # streaming real. requests sigue el redirect 302 que Graph API devuelve
+    # hacia la URL firmada de descarga; a partir de requests>=2.x, el header
+    # Authorization se descarta automáticamente al redirigir a otro host
+    # (la URL firmada no lo necesita ni debe llevarlo).
+    resp = requests.get(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        stream=True,
+        timeout=60,
+    )
+    if resp.status_code != 200:
+        raise OneDriveUploadError(
+            f"Graph API respondió {resp.status_code} al descargar el "
+            f"archivo (item_id={item_id}): {resp.text[:500]}"
+        )
+
+    content_type = resp.headers.get("Content-Type", "application/octet-stream")
+    return resp, content_type
 
 
 def subir_a_onedrive(archivo_django, nombre_destino: str) -> dict:

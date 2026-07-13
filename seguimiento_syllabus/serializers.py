@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.urls import reverse
 from .models import Carrera, Cohorte, PeriodoAcademico, Asignatura, Evidencia
 from .onedrive_service import subir_a_onedrive
 
@@ -37,6 +38,15 @@ class EvidenciaSerializer(serializers.ModelSerializer):
     # nombres nuevos (ver ese archivo, se actualizó en el mismo cambio).
     onedrive_url = serializers.SerializerMethodField()
     onedrive_nombre = serializers.SerializerMethodField()
+    # vista_previa_url: URL propia (same-origin) para el <iframe> del
+    # frontend, que hace de proxy del archivo real en OneDrive — ver
+    # api_views.evidencia_archivo. onedrive_url (el link público de
+    # Microsoft) sigue siendo el que usa el botón "Abrir documento", que
+    # ya funciona bien; este campo nuevo es SOLO para resolver el bloqueo
+    # de CSP que Microsoft impone sobre embeber sus propias páginas en un
+    # iframe de otro origen. None si la evidencia todavía no tiene
+    # archivo en OneDrive (histórica sin migrar).
+    vista_previa_url = serializers.SerializerMethodField()
     # write_only: sigue recibiendo el archivo tal cual lo manda el
     # formulario del frontend (multipart/form-data), pero create() lo
     # intercepta y lo sube a OneDrive en vez de guardarlo en el modelo.
@@ -46,7 +56,8 @@ class EvidenciaSerializer(serializers.ModelSerializer):
         model = Evidencia
         fields = [
             'id', 'asignatura', 'periodo_academico', 'carrera', 'tipo', 'tipo_display',
-            'archivo', 'onedrive_url', 'onedrive_nombre', 'subido_por', 'fecha_subida', 'vigente',
+            'archivo', 'onedrive_url', 'onedrive_nombre', 'vista_previa_url',
+            'subido_por', 'fecha_subida', 'vigente',
         ]
 
     def create(self, validated_data):
@@ -126,3 +137,10 @@ class EvidenciaSerializer(serializers.ModelSerializer):
             return obj.nombre_archivo_original
         # Evidencia histórica sin migrar todavía.
         return obj.archivo.name.split('/')[-1] if obj.archivo else None
+
+    def get_vista_previa_url(self, obj):
+        if not obj.onedrive_item_id:
+            return None
+        path = reverse('evidencia_archivo', kwargs={'evidencia_id': obj.id})
+        request = self.context.get('request')
+        return request.build_absolute_uri(path) if request else path

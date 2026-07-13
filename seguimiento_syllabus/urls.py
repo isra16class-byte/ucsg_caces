@@ -9,6 +9,7 @@ urlpatterns = [
     path('api/asignaturas/', api_views.api_asignaturas, name='api_asignaturas'),
     path('api/materias-encuesta/', api_views.api_materias_encuesta, name='api_materias_encuesta'),
     path('api/evidencias/', api_views.api_evidencias, name='api_evidencias'),
+    path('api/evidencias/<int:evidencia_id>/archivo/', api_views.evidencia_archivo, name='evidencia_archivo'),
     path('api/resultado/', api_views.api_resultado, name='api_resultado'),
     path('api/resultado-cohorte/', api_views.api_resultado_cohorte, name='api_resultado_cohorte'),
     path('api/encuesta/', api_views.api_encuesta, name='api_encuesta'),

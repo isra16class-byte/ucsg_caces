@@ -4,6 +4,9 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 from django.db import models
+from django.http import StreamingHttpResponse, JsonResponse
+from django.views.decorators.http import require_GET
+from django.views.decorators.clickjacking import xframe_options_exempt
 
 from .models import Carrera, Cohorte, PeriodoAcademico, Asignatura, Evidencia
 from .serializers import (
@@ -17,6 +20,7 @@ from .onedrive_service import (
     OneDriveNoConfiguradoError,
     OneDriveAuthError,
     OneDriveUploadError,
+    descargar_contenido,
 )
 # Reutilizamos la lógica de negocio centralizada en views.py; no se duplica.
 from .views import (  # noqa: F401
@@ -243,6 +247,70 @@ def api_evidencias(request):
         'total': evidencias_qs.count(),
         'evidencias': EvidenciaSerializer(evidencias_qs, many=True, context={'request': request}).data,
     })
+
+
+@require_GET
+@xframe_options_exempt
+def evidencia_archivo(request, evidencia_id):
+    """
+    Proxy same-origin del archivo de evidencia guardado en OneDrive.
+
+    Usado por el <iframe> de vista previa del frontend (campo
+    vista_previa_url del serializer). NO reemplaza onedrive_url: el botón
+    "Abrir documento" sigue usando el link público de Microsoft
+    directamente (ya confirmado funcionando).
+
+    Motivo de este endpoint: Microsoft impone un Content-Security-Policy
+    (frame-ancestors) en sus propias páginas de SharePoint/OneDrive que
+    bloquea embeberlas en un <iframe> de otro dominio — restricción de la
+    plataforma de Microsoft, no de este backend, y no hay forma de
+    desactivarla desde acá. La solución es traer los bytes del archivo a
+    través de nuestro propio backend (mismo origen que el resto de la
+    API) y servirlos nosotros mismos, donde no aplica ese CSP.
+
+    @xframe_options_exempt es necesario porque XFrameOptionsMiddleware de
+    Django agrega "X-Frame-Options: DENY" por defecto a TODAS las
+    respuestas (no hay X_FRAME_OPTIONS configurado en settings.py) — sin
+    este decorador, este endpoint quedaría bloqueado por nuestro propio
+    Django en vez de por el CSP de Microsoft. El exemption es
+    intencionalmente puntual (solo esta vista), el resto del sitio sigue
+    protegido contra clickjacking con el default de Django.
+
+    No usa @api_view/Response de DRF a propósito: DRF espera que la vista
+    devuelva un rest_framework.response.Response (finalize_response accede
+    a atributos que un StreamingHttpResponse no tiene), así que esta es
+    una vista de Django plano, no de DRF.
+    """
+    evidencia = get_object_or_404(Evidencia, id=evidencia_id)
+
+    if not evidencia.onedrive_item_id:
+        # Evidencia histórica que todavía no pasó por
+        # migrar_evidencia_a_onedrive.py --aplicar (o registro sin
+        # archivo). No hay nada que hacer de proxy acá.
+        return JsonResponse(
+            {'error': 'Esta evidencia no tiene un archivo en OneDrive disponible para vista previa.'},
+            status=404,
+        )
+
+    try:
+        resp_onedrive, content_type = descargar_contenido(evidencia.onedrive_item_id)
+    except OneDriveNoConfiguradoError as exc:
+        return JsonResponse({'error': str(exc)}, status=503)
+    except (OneDriveAuthError, OneDriveUploadError) as exc:
+        return JsonResponse(
+            {'error': f'No se pudo obtener el archivo de OneDrive: {exc}'},
+            status=503,
+        )
+
+    response = StreamingHttpResponse(
+        resp_onedrive.iter_content(chunk_size=8192),
+        content_type=content_type,
+    )
+    nombre = evidencia.nombre_archivo_original or f'evidencia_{evidencia.id}'
+    # inline (no attachment): el <iframe> debe MOSTRAR el archivo, no
+    # forzar una descarga.
+    response['Content-Disposition'] = f'inline; filename="{nombre}"'
+    return response
 
 
 # ---------- Resultado (EF1-EF5) por asignatura ----------

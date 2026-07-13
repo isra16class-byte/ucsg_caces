@@ -43,6 +43,7 @@ interface Evidencia {
   tipo_display: string;
   onedrive_url: string;
   onedrive_nombre: string;
+  vista_previa_url: string | null;
   subido_por: string;
   fecha_subida: string;
   vigente: boolean;
@@ -1415,7 +1416,7 @@ function TabEvidencias({ asignatura, onEvidenceUploaded }: { asignatura: Asignat
         <div className="flex-1 overflow-hidden flex items-center justify-center min-h-0" style={{ minHeight: 400 }}>
           {selectedEvidencia ? (
             <iframe
-              src={selectedEvidencia.onedrive_url}
+              src={selectedEvidencia.vista_previa_url ?? selectedEvidencia.onedrive_url}
               width="100%"
               height="100%"
               className="w-full h-full"
