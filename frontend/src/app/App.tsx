@@ -41,8 +41,8 @@ interface Evidencia {
   carrera: number | null;
   tipo: "malla_curricular" | "syllabus" | "acta_retroalimentacion" | "acta_ajuste_curricular" | "evidencia_difusion" | "reglamento_normativa";
   tipo_display: string;
-  archivo_url: string;
-  archivo_nombre: string;
+  onedrive_url: string;
+  onedrive_nombre: string;
   subido_por: string;
   fecha_subida: string;
   vigente: boolean;
@@ -1200,7 +1200,7 @@ function generarPdfAsignatura(jsPDF: typeof import("jspdf").default, params: {
     return [
       EVIDENCIA_EF[tipo],
       EVIDENCIA_PDF_LABELS[tipo],
-      ev ? (ev.archivo_nombre ?? "—") : "Sin evidencia subida",
+      ev ? (ev.onedrive_nombre ?? "—") : "Sin evidencia subida",
       ev ? new Date(ev.fecha_subida).toLocaleDateString("es-EC") : "—",
       ev ? (ev.subido_por || "—") : "—",
     ];
@@ -1401,11 +1401,11 @@ function TabEvidencias({ asignatura, onEvidenceUploaded }: { asignatura: Asignat
               {selected ? TIPOS.find((t) => t.value === selected)?.label : "Vista previa"}
             </h3>
             {selectedEvidencia && (
-              <p className="text-xs mt-0.5 font-mono" style={{ color: SLATE }}>{selectedEvidencia.archivo_nombre}</p>
+              <p className="text-xs mt-0.5 font-mono" style={{ color: SLATE }}>{selectedEvidencia.onedrive_nombre}</p>
             )}
           </div>
           {selectedEvidencia && (
-            <a href={selectedEvidencia.archivo_url} target="_blank" rel="noreferrer"
+            <a href={selectedEvidencia.onedrive_url} target="_blank" rel="noreferrer"
               className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all hover:opacity-90"
               style={{ background: NAVY, color: "#fff" }}>
               <ExternalLink size={11} /> Abrir documento
@@ -1415,11 +1415,11 @@ function TabEvidencias({ asignatura, onEvidenceUploaded }: { asignatura: Asignat
         <div className="flex-1 overflow-hidden flex items-center justify-center min-h-0" style={{ minHeight: 400 }}>
           {selectedEvidencia ? (
             <iframe
-              src={selectedEvidencia.archivo_url}
+              src={selectedEvidencia.onedrive_url}
               width="100%"
               height="100%"
               className="w-full h-full"
-              title={selectedEvidencia.archivo_nombre}
+              title={selectedEvidencia.onedrive_nombre}
               style={{ border: "none" }}
             />
           ) : selected ? (

@@ -29,15 +29,14 @@ class AsignaturaSerializer(serializers.ModelSerializer):
 
 class EvidenciaSerializer(serializers.ModelSerializer):
     tipo_display = serializers.CharField(source='get_tipo_display', read_only=True)
-    # NOTA (integración OneDrive): se mantienen los nombres de campo
-    # "archivo_url" / "archivo_nombre" en la salida del API a propósito,
-    # aunque ahora el archivo vive en OneDrive y no en el servidor local —
-    # así el frontend (App.tsx) sigue funcionando sin cambios, ya que solo
-    # consume estos 2 campos como strings opacos (ver alcance en
-    # prompt_onedrive.md: "no debería necesitar cambios grandes"). Por
-    # dentro, ahora vienen de onedrive_url / nombre_archivo_original.
-    archivo_url = serializers.SerializerMethodField()
-    archivo_nombre = serializers.SerializerMethodField()
+    # NOTA (integración OneDrive, renombrado confirmado por el usuario el
+    # 12 de julio de 2026): la salida del API usa "onedrive_url" /
+    # "onedrive_nombre" en vez de "archivo_url" / "archivo_nombre" —
+    # nombres más honestos ahora que el archivo vive en OneDrive y no en
+    # el servidor local. Requiere que el frontend (App.tsx) lea estos
+    # nombres nuevos (ver ese archivo, se actualizó en el mismo cambio).
+    onedrive_url = serializers.SerializerMethodField()
+    onedrive_nombre = serializers.SerializerMethodField()
     # write_only: sigue recibiendo el archivo tal cual lo manda el
     # formulario del frontend (multipart/form-data), pero create() lo
     # intercepta y lo sube a OneDrive en vez de guardarlo en el modelo.
@@ -47,7 +46,7 @@ class EvidenciaSerializer(serializers.ModelSerializer):
         model = Evidencia
         fields = [
             'id', 'asignatura', 'periodo_academico', 'carrera', 'tipo', 'tipo_display',
-            'archivo', 'archivo_url', 'archivo_nombre', 'subido_por', 'fecha_subida', 'vigente',
+            'archivo', 'onedrive_url', 'onedrive_nombre', 'subido_por', 'fecha_subida', 'vigente',
         ]
 
     def create(self, validated_data):
@@ -112,7 +111,7 @@ class EvidenciaSerializer(serializers.ModelSerializer):
                 })
         return data
 
-    def get_archivo_url(self, obj):
+    def get_onedrive_url(self, obj):
         if obj.onedrive_url:
             return obj.onedrive_url
         # Evidencia histórica (subida antes de la migración a OneDrive) que
@@ -122,7 +121,7 @@ class EvidenciaSerializer(serializers.ModelSerializer):
             return request.build_absolute_uri(obj.archivo.url)
         return obj.archivo.url if obj.archivo else None
 
-    def get_archivo_nombre(self, obj):
+    def get_onedrive_nombre(self, obj):
         if obj.nombre_archivo_original:
             return obj.nombre_archivo_original
         # Evidencia histórica sin migrar todavía.
