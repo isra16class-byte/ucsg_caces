@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import Carrera, Cohorte, PeriodoAcademico, Asignatura, Evidencia
+from .onedrive_service import subir_a_onedrive
 
 
 class CarreraSerializer(serializers.ModelSerializer):
@@ -28,8 +29,19 @@ class AsignaturaSerializer(serializers.ModelSerializer):
 
 class EvidenciaSerializer(serializers.ModelSerializer):
     tipo_display = serializers.CharField(source='get_tipo_display', read_only=True)
+    # NOTA (integración OneDrive): se mantienen los nombres de campo
+    # "archivo_url" / "archivo_nombre" en la salida del API a propósito,
+    # aunque ahora el archivo vive en OneDrive y no en el servidor local —
+    # así el frontend (App.tsx) sigue funcionando sin cambios, ya que solo
+    # consume estos 2 campos como strings opacos (ver alcance en
+    # prompt_onedrive.md: "no debería necesitar cambios grandes"). Por
+    # dentro, ahora vienen de onedrive_url / nombre_archivo_original.
     archivo_url = serializers.SerializerMethodField()
     archivo_nombre = serializers.SerializerMethodField()
+    # write_only: sigue recibiendo el archivo tal cual lo manda el
+    # formulario del frontend (multipart/form-data), pero create() lo
+    # intercepta y lo sube a OneDrive en vez de guardarlo en el modelo.
+    archivo = serializers.FileField(write_only=True, required=True)
 
     class Meta:
         model = Evidencia
@@ -37,9 +49,27 @@ class EvidenciaSerializer(serializers.ModelSerializer):
             'id', 'asignatura', 'periodo_academico', 'carrera', 'tipo', 'tipo_display',
             'archivo', 'archivo_url', 'archivo_nombre', 'subido_por', 'fecha_subida', 'vigente',
         ]
-        extra_kwargs = {
-            'archivo': {'write_only': True},
-        }
+
+    def create(self, validated_data):
+        archivo_django = validated_data.pop('archivo')
+        tipo = validated_data.get('tipo')
+        contexto = (
+            validated_data.get('carrera')
+            or validated_data.get('periodo_academico')
+            or validated_data.get('asignatura')
+        )
+        # Nombre único para evitar colisiones en OneDrive entre evidencias
+        # de distinto tipo/contexto (no hace falta que sea "bonito", solo
+        # único y trazable — el nombre visible para el usuario sigue siendo
+        # nombre_archivo_original, tomado del archivo original).
+        nombre_destino = f"{tipo}_{contexto.pk if contexto else 'sin_contexto'}_{archivo_django.name}"
+
+        resultado = subir_a_onedrive(archivo_django, nombre_destino)
+
+        validated_data['onedrive_url'] = resultado['webUrl']
+        validated_data['onedrive_item_id'] = resultado['item_id']
+        validated_data['nombre_archivo_original'] = archivo_django.name
+        return Evidencia.objects.create(**validated_data)
 
     def validate(self, data):
         tipo = data.get('tipo')
@@ -83,10 +113,17 @@ class EvidenciaSerializer(serializers.ModelSerializer):
         return data
 
     def get_archivo_url(self, obj):
+        if obj.onedrive_url:
+            return obj.onedrive_url
+        # Evidencia histórica (subida antes de la migración a OneDrive) que
+        # todavía no pasó por migrar_evidencia_a_onedrive.py --aplicar.
         request = self.context.get('request')
         if obj.archivo and request:
             return request.build_absolute_uri(obj.archivo.url)
         return obj.archivo.url if obj.archivo else None
 
     def get_archivo_nombre(self, obj):
+        if obj.nombre_archivo_original:
+            return obj.nombre_archivo_original
+        # Evidencia histórica sin migrar todavía.
         return obj.archivo.name.split('/')[-1] if obj.archivo else None

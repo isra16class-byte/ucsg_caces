@@ -108,6 +108,19 @@ DATABASES = {
     }
 }
 
+# Integración de evidencias con OneDrive (Microsoft Graph API, app-only /
+# client-credentials vía MSAL). Ver seguimiento_syllabus/onedrive_service.py.
+# Credenciales de Azure AD: tenant de prueba "Microsoft 365 Apps for
+# business" (trial, vence 12/8/2026 — renovar o migrar a tenant
+# institucional de la UCSG antes de esa fecha o se corta la subida).
+# Default vacío a propósito: sin estas 4 variables en .env,
+# subir_a_onedrive() falla con un error explícito
+# (OneDriveNoConfiguradoError) en vez de un traceback genérico.
+AZURE_TENANT_ID = config('AZURE_TENANT_ID', default='')
+AZURE_CLIENT_ID = config('AZURE_CLIENT_ID', default='')
+AZURE_CLIENT_SECRET = config('AZURE_CLIENT_SECRET', default='')
+ONEDRIVE_DRIVE_ID = config('ONEDRIVE_DRIVE_ID', default='')
+
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators

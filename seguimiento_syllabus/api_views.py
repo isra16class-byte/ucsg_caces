@@ -13,6 +13,11 @@ from .serializers import (
     AsignaturaSerializer,
     EvidenciaSerializer,
 )
+from .onedrive_service import (
+    OneDriveNoConfiguradoError,
+    OneDriveAuthError,
+    OneDriveUploadError,
+)
 # Reutilizamos la lógica de negocio centralizada en views.py; no se duplica.
 from .views import (  # noqa: F401
     _calcular_ef_desde_csv,
@@ -198,7 +203,18 @@ def api_evidencias(request):
             # contaban para EF2/EF3/EF5. Por eso "Resultados" nunca reflejaba las
             # evidencias recién subidas, aunque en la pestaña "Evidencias" sí se
             # vieran como "Cargado ✓" (esa vista no filtra por vigente).
-            serializer.save(vigente=True)
+            #
+            # La subida real del archivo pasa DENTRO de serializer.save() ->
+            # EvidenciaSerializer.create() -> subir_a_onedrive(). Cualquier
+            # falla ahí (credenciales de Azure faltantes, error de Graph API)
+            # se traduce acá a un 503 controlado, mismo patrón que ya se usa
+            # para cuando Google Sheets no responde (ver api_encuesta_resultados).
+            try:
+                serializer.save(vigente=True)
+            except OneDriveNoConfiguradoError as exc:
+                return Response({'error': str(exc)}, status=503)
+            except (OneDriveAuthError, OneDriveUploadError) as exc:
+                return Response({'error': f'No se pudo subir el archivo a OneDrive: {exc}'}, status=503)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

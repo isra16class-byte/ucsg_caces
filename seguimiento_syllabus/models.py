@@ -94,10 +94,25 @@ class Evidencia(models.Model):
         null=True, blank=True,
     )
     tipo = models.CharField(max_length=30, choices=TIPO_CHOICES)
+    # NOTA (integración OneDrive, ver seguimiento_syllabus/onedrive_service.py):
+    # a partir de ahora el archivo físico NO se guarda más en el servidor
+    # local (media/) — se sube a OneDrive vía Microsoft Graph API y acá solo
+    # queda el link/metadata (onedrive_url, onedrive_item_id,
+    # nombre_archivo_original). `archivo` se deja nullable/blank a propósito,
+    # TEMPORALMENTE, para no romper las evidencias ya existentes que todavía
+    # tienen el archivo local: hasta que se confirme (management command
+    # migrar_evidencia_a_onedrive.py --aplicar) que toda la evidencia
+    # histórica se migró a OneDrive, este campo se mantiene solo para lectura
+    # de esos casos viejos. Una vez confirmada esa migración, se saca
+    # `archivo` del modelo en una migración aparte.
     archivo = models.FileField(
         upload_to='evidencias/',
         validators=[FileExtensionValidator(['pdf', 'jpg', 'jpeg', 'png', 'mp4'])],
+        null=True, blank=True,
     )
+    onedrive_url = models.URLField(max_length=500, blank=True, default='')
+    onedrive_item_id = models.CharField(max_length=200, blank=True, default='')
+    nombre_archivo_original = models.CharField(max_length=255, blank=True, default='')
     subido_por = models.CharField(max_length=150, blank=True, default='')
     fecha_subida = models.DateTimeField(auto_now_add=True)
     vigente = models.BooleanField(default=True)

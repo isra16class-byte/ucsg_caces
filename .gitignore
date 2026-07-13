@@ -1,6 +1,8 @@
 ﻿.aider.chat.history.md
 .aider.input.history
 .aider.tags.cache.v4
+datos_backup.json
+get_drive_id.py
 .claw/
 CLAUDE.md
 db.sqlite3
