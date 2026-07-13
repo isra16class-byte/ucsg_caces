@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.urls import reverse
 from .models import Carrera, Cohorte, PeriodoAcademico, Asignatura, Evidencia
-from .onedrive_service import subir_a_onedrive
+from .onedrive_service import subir_a_onedrive, construir_ruta_carpetas, construir_nombre_archivo
 
 
 class CarreraSerializer(serializers.ModelSerializer):
@@ -63,18 +63,20 @@ class EvidenciaSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         archivo_django = validated_data.pop('archivo')
         tipo = validated_data.get('tipo')
-        contexto = (
-            validated_data.get('carrera')
-            or validated_data.get('periodo_academico')
-            or validated_data.get('asignatura')
+        # Organiza el archivo en OneDrive replicando la jerarquía real
+        # (Carrera / Cohorte / PAO / Asignatura, o "Evidencia General de
+        # Carrera" para EF5) en vez de dejarlo plano en una sola carpeta —
+        # ver construir_ruta_carpetas() en onedrive_service.py. El nombre
+        # del archivo dentro de esa carpeta lleva tipo + timestamp para
+        # que dos subidas del mismo tipo/contexto nunca se pisen entre sí.
+        carpetas = construir_ruta_carpetas(
+            carrera=validated_data.get('carrera'),
+            periodo_academico=validated_data.get('periodo_academico'),
+            asignatura=validated_data.get('asignatura'),
         )
-        # Nombre único para evitar colisiones en OneDrive entre evidencias
-        # de distinto tipo/contexto (no hace falta que sea "bonito", solo
-        # único y trazable — el nombre visible para el usuario sigue siendo
-        # nombre_archivo_original, tomado del archivo original).
-        nombre_destino = f"{tipo}_{contexto.pk if contexto else 'sin_contexto'}_{archivo_django.name}"
+        nombre_archivo = construir_nombre_archivo(tipo, archivo_django.name)
 
-        resultado = subir_a_onedrive(archivo_django, nombre_destino)
+        resultado = subir_a_onedrive(archivo_django, carpetas, nombre_archivo)
 
         validated_data['onedrive_url'] = resultado['webUrl']
         validated_data['onedrive_item_id'] = resultado['item_id']

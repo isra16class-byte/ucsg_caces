@@ -30,6 +30,33 @@ nuestro propio backend y evitar el Content-Security-Policy que Microsoft
 impone sobre sus propias páginas (bloquea el <iframe> apuntando directo a
 onedrive_url). El link público "view"/anonymous sigue siendo el que usa
 el botón "Abrir documento" del frontend — no cambia.
+
+Organización en carpetas dentro de OneDrive (agregado 13 de julio de
+2026): antes de esto, TODO archivo subido caía plano dentro de una sola
+carpeta (CARPETA_EVIDENCIAS), con el tipo y el id del contexto embebidos
+en el nombre del archivo para diferenciarlos — funcional, pero
+desordenado para navegar a mano desde OneDrive. Ahora `subir_a_onedrive()`
+recibe una lista de carpetas (`carpetas`) que arma la ruta completa,
+reflejando la jerarquía real: Carrera / Cohorte / PAO / Asignatura para
+evidencia de nivel asignatura, o Carrera / "Evidencia General de Carrera"
+para evidencia de nivel carrera (EF5). `construir_ruta_carpetas()` arma
+esa lista a partir de los objetos Carrera/PeriodoAcademico/Asignatura
+(exactamente uno de los tres, igual que ya exige EvidenciaSerializer.validate()),
+y `construir_nombre_archivo()` arma el nombre del archivo dentro de esa
+carpeta (tipo + timestamp + nombre original) para que dos evidencias del
+mismo tipo en el mismo contexto (ej. un syllabus re-subido) NUNCA
+sobreescriban silenciosamente el archivo de la otra en OneDrive — Graph
+API reemplaza el contenido de un item existente si se sube al mismo path,
+así que la unicidad del nombre de archivo es lo que evita que dos
+Evidencia con onedrive_item_id distintos terminen apuntando, sin darse
+cuenta, al mismo archivo. Microsoft Graph crea automáticamente cualquier
+carpeta intermedia que todavía no exista en la ruta al subir por path
+(`root:/carpeta1/carpeta2/archivo:/content`), así que no hace falta
+crearlas a mano ni con una llamada aparte.
+
+Estas mismas funciones las usa también el management command
+`migrar_evidencia_a_onedrive.py`, para que la evidencia histórica migrada
+quede organizada igual que la nueva.
 """
 import mimetypes
 
@@ -103,12 +130,94 @@ def _obtener_token() -> str:
     return resultado["access_token"]
 
 
-def _nombre_destino_unico(nombre_destino: str) -> str:
-    # Graph API no acepta ciertos caracteres en nombres de archivo/ruta
-    # (\\ / : * ? " < > | #). Reemplazo cualquiera que aparezca por "_".
+def _limpiar_segmento(segmento: str) -> str:
+    """
+    Sanitiza UN solo segmento de ruta (un nombre de carpeta o de archivo,
+    nunca una ruta completa con "/" adentro a propósito: "/" es lo que
+    separa carpetas, no se debe tocar acá). Graph API no acepta ciertos
+    caracteres en nombres de archivo/carpeta (\\ / : * ? " < > | #);
+    cualquiera que aparezca dentro de un segmento (ej. una asignatura con
+    "/" en el nombre, o un tipo de evidencia con paréntesis) se reemplaza
+    por "_". También recorta espacios sobrantes al inicio/final, que
+    Graph API rechaza en nombres.
+    """
     caracteres_invalidos = '\\/:*?"<>|#'
-    limpio = "".join("_" if c in caracteres_invalidos else c for c in nombre_destino)
-    return f"{CARPETA_EVIDENCIAS}/{limpio}"
+    limpio = "".join("_" if c in caracteres_invalidos else c for c in segmento)
+    return limpio.strip() or "_"
+
+
+def construir_ruta_carpetas(carrera=None, periodo_academico=None, asignatura=None) -> list:
+    """
+    Arma la lista de carpetas (en orden, sin sanitizar todavía — eso lo
+    hace subir_a_onedrive/ruta_destino_completa) donde debe vivir una
+    evidencia dentro de OneDrive, según su contexto real. Se espera
+    exactamente UNO de los tres parámetros (misma regla que
+    EvidenciaSerializer.validate() ya exige): si llegara más de uno, se
+    usa el de nivel más específico (asignatura > periodo_academico >
+    carrera), para no dejar ninguna evidencia sin ruta.
+
+    - asignatura (syllabus, actas EF2, evidencia_difusion EF3):
+        Carrera / Cohorte / PAO / Asignatura
+    - periodo_academico (hoy sin tipos activos, EF4 futuro):
+        Carrera / Cohorte / PAO / "Evidencia General del PAO"
+    - carrera (malla_curricular, reglamento_normativa EF5):
+        Carrera / "Evidencia General de Carrera"
+    - ninguno (no debería pasar si validate() corrió antes, pero no se
+      quiere que una evidencia se pierda sin carpeta por eso):
+        "Sin Contexto"
+    """
+    if asignatura is not None:
+        periodo = asignatura.periodo_academico
+        return [
+            periodo.cohorte.carrera.nombre,
+            periodo.cohorte.nombre,
+            periodo.nombre,
+            asignatura.nombre,
+        ]
+    if periodo_academico is not None:
+        return [
+            periodo_academico.cohorte.carrera.nombre,
+            periodo_academico.cohorte.nombre,
+            periodo_academico.nombre,
+            "Evidencia General del PAO",
+        ]
+    if carrera is not None:
+        return [carrera.nombre, "Evidencia General de Carrera"]
+    return ["Sin Contexto"]
+
+
+def construir_nombre_archivo(tipo: str, nombre_original: str) -> str:
+    """
+    Arma el nombre de archivo dentro de la carpeta de contexto ya
+    organizada por construir_ruta_carpetas(): tipo + timestamp (a la
+    subida) + nombre original. El timestamp es lo que garantiza unicidad
+    real (no el tipo ni el nombre original solos): dos subidas del mismo
+    tipo de evidencia, para el mismo contexto, con el mismo nombre de
+    archivo original (ej. el usuario re-sube "syllabus.pdf" corregido)
+    NO deben colisionar en la misma ruta de OneDrive — si colisionaran,
+    Graph API reemplazaría el contenido del item existente, y la
+    Evidencia vieja (que sigue guardando ese mismo onedrive_item_id)
+    empezaría a mostrar, sin darse cuenta, el archivo nuevo.
+    """
+    from django.utils import timezone
+
+    timestamp = timezone.now().strftime("%Y%m%d_%H%M%S")
+    return f"{tipo}_{timestamp}_{nombre_original}"
+
+
+def ruta_destino_completa(carpetas: list, nombre_archivo: str) -> str:
+    """
+    Sanitiza cada segmento (carpetas + nombre de archivo) por separado y
+    los une con "/" para formar la ruta relativa completa dentro de
+    CARPETA_EVIDENCIAS, lista para usar en las URLs de Graph API con
+    direccionamiento por path (root:/ruta:/content). Función pública
+    porque también sirve para PREVISUALIZAR la ruta antes de subir (ver
+    migrar_evidencia_a_onedrive.py --dry-run), sin necesidad de subir
+    nada todavía.
+    """
+    segmentos = [CARPETA_EVIDENCIAS] + [_limpiar_segmento(c) for c in carpetas]
+    segmentos.append(_limpiar_segmento(nombre_archivo))
+    return "/".join(segmentos)
 
 
 def _subida_simple(archivo_django, ruta_destino: str, token: str) -> dict:
@@ -292,12 +401,22 @@ def descargar_contenido(item_id: str):
     return resp, content_type
 
 
-def subir_a_onedrive(archivo_django, nombre_destino: str) -> dict:
+def subir_a_onedrive(archivo_django, carpetas: list, nombre_archivo: str) -> dict:
     """
     Sube un archivo (InMemoryUploadedFile o TemporaryUploadedFile de Django)
-    a la carpeta de evidencias en OneDrive vía Microsoft Graph API, usando
-    autenticación client-credentials (MSAL), y le pide a Graph un link de
-    acceso público (view, anonymous) para poder mostrarlo sin login.
+    a OneDrive vía Microsoft Graph API, dentro de la ruta de carpetas
+    indicada (ver construir_ruta_carpetas() para armarla según el
+    contexto real de la evidencia), usando autenticación client-credentials
+    (MSAL), y le pide a Graph un link de acceso público (view, anonymous)
+    para poder mostrarlo sin login.
+
+    `carpetas` es una lista de nombres de carpeta en orden (ej.
+    ["Desarrollo de Software", "Cohorte B 2026", "PAO 1", "Bases de
+    Datos"]) — NO hace falta crearlas de antemano: Graph API las crea
+    automáticamente si no existen al subir por path
+    (root:/carpeta1/carpeta2/archivo:/content). `nombre_archivo` es el
+    nombre del archivo dentro de esa carpeta (ver construir_nombre_archivo()
+    para que sea único y no pise otra evidencia existente).
 
     Devuelve {'webUrl': ..., 'item_id': ...} — 'webUrl' acá es el link
     público de tipo "view"/anonymous, NO el webUrl privado crudo del item.
@@ -309,7 +428,7 @@ def subir_a_onedrive(archivo_django, nombre_destino: str) -> dict:
         del link público.
     """
     token = _obtener_token()  # levanta OneDriveNoConfiguradoError / OneDriveAuthError
-    ruta_destino = _nombre_destino_unico(nombre_destino)
+    ruta_destino = ruta_destino_completa(carpetas, nombre_archivo)
 
     if archivo_django.size < LIMITE_SIMPLE_UPLOAD_BYTES:
         resultado = _subida_simple(archivo_django, ruta_destino, token)

@@ -27,7 +27,13 @@ USO:
 
 from django.core.management.base import BaseCommand
 from seguimiento_syllabus.models import Evidencia
-from seguimiento_syllabus.onedrive_service import subir_a_onedrive, OneDriveError
+from seguimiento_syllabus.onedrive_service import (
+    subir_a_onedrive,
+    construir_ruta_carpetas,
+    construir_nombre_archivo,
+    ruta_destino_completa,
+    OneDriveError,
+)
 
 
 class Command(BaseCommand):
@@ -61,9 +67,21 @@ class Command(BaseCommand):
 
         self.stdout.write(f"Se encontraron {total} evidencia(s) con archivo local sin migrar:\n")
         for ev in pendientes:
+            # Ruta prevista en OneDrive (Carrera/Cohorte/PAO/Asignatura, o
+            # Carrera/Evidencia General de Carrera para EF5) — se muestra
+            # también en el dry-run, sin subir nada, para poder revisar
+            # cómo va a quedar organizado antes de correr --aplicar.
+            carpetas = construir_ruta_carpetas(
+                carrera=ev.carrera,
+                periodo_academico=ev.periodo_academico,
+                asignatura=ev.asignatura,
+            )
+            nombre_archivo = construir_nombre_archivo(ev.tipo, ev.archivo.name.split("/")[-1])
+            ruta_prevista = ruta_destino_completa(carpetas, nombre_archivo)
             self.stdout.write(
                 f"  - id={ev.id} | tipo={ev.tipo} | archivo={ev.archivo.name} "
-                f"| subida={ev.fecha_subida:%Y-%m-%d %H:%M}"
+                f"| subida={ev.fecha_subida:%Y-%m-%d %H:%M}\n"
+                f"      -> OneDrive: {ruta_prevista}"
             )
 
         if not aplicar:
@@ -79,11 +97,16 @@ class Command(BaseCommand):
         fallidas = []
 
         for ev in pendientes:
-            nombre_destino = f"{ev.tipo}_id{ev.id}_{ev.archivo.name.split('/')[-1]}"
+            carpetas = construir_ruta_carpetas(
+                carrera=ev.carrera,
+                periodo_academico=ev.periodo_academico,
+                asignatura=ev.asignatura,
+            )
+            nombre_archivo = construir_nombre_archivo(ev.tipo, ev.archivo.name.split("/")[-1])
             try:
                 ev.archivo.open("rb")
                 try:
-                    resultado = subir_a_onedrive(ev.archivo, nombre_destino)
+                    resultado = subir_a_onedrive(ev.archivo, carpetas, nombre_archivo)
                 finally:
                     ev.archivo.close()
             except OneDriveError as exc:
