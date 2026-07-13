@@ -2,16 +2,27 @@
 Servicio de subida de archivos de evidencia a OneDrive vía Microsoft Graph
 API, con autenticación app-only (client credentials) usando MSAL.
 
-⚠️ BLOQUEANTE (ver prompt_onedrive.md): este flujo requiere una app
-registrada en Azure AD con permiso `Files.ReadWrite.All` (tipo Application,
-no delegated) sobre una cuenta OneDrive. NO sirve una cuenta personal tipo
-outlook.com/hotmail.com para autenticación app-only — tiene que ser una
-cuenta Microsoft 365 (institucional o, mientras tanto, un tenant de prueba
-del Microsoft 365 Developer Program). Las 4 variables de entorno
-(AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, ONEDRIVE_DRIVE_ID)
-tienen que estar configuradas en `.env` para que esto funcione — ver
+Requiere una app registrada en Azure AD con permiso `Files.ReadWrite.All`
+(tipo Application, no delegated) sobre una cuenta OneDrive. Las 4 variables
+de entorno (AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET,
+ONEDRIVE_DRIVE_ID) tienen que estar configuradas en `.env` — ver
 `.env.example`. Sin ellas, `subir_a_onedrive()` falla explícitamente con
 `OneDriveNoConfiguradoError`, NO con un traceback genérico de conexión.
+
+Después de subir el archivo, se le pide a Graph API un link de acceso
+explícito (`createLink`, tipo "view", alcance "anonymous") — el `webUrl`
+crudo del item NO sirve para esto: es una URL privada del tenant que exige
+login de Microsoft. Alcance "anonymous" a propósito: los evaluadores de
+CACES son externos, no tienen cuenta en el tenant de la UCSG (decisión
+confirmada con el usuario el 12 de julio de 2026).
+
+⚠️ Nota de una vuelta anterior de este archivo: se probó primero con tipo
+"embed" (pensado específicamente para <iframe>), pero Graph API lo
+rechaza con 400 "invalidRequest" en cuentas OneDrive for Business /
+SharePoint — la documentación de Microsoft aclara que **"embed" solo está
+soportado en OneDrive personal (consumidor)**, no en cuentas
+institucionales. Por eso acá se usa "view", que sí es válido para
+OneDrive for Business con scope "anonymous".
 """
 import mimetypes
 
@@ -184,18 +195,54 @@ def _subida_por_sesion(archivo_django, ruta_destino: str, token: str) -> dict:
     return respuesta_final
 
 
+def _crear_link_publico(item_id: str, token: str) -> str:
+    """
+    Pide a Graph API un link de acceso explícito para el archivo recién
+    subido, tipo "view" (solo lectura) y alcance "anonymous" (cualquiera
+    con el link, sin necesitar cuenta del tenant — evaluadores CACES son
+    externos). NO se usa tipo "embed": Graph API lo rechaza con 400 en
+    cuentas OneDrive for Business/SharePoint, solo existe para OneDrive
+    personal (ver nota en el docstring del módulo). Devuelve la URL del
+    link. Si el archivo ya tenía un link igual creado antes, Graph API
+    devuelve el mismo (createLink es idempotente para el mismo
+    type+scope), así que es seguro llamarlo siempre.
+    """
+    url = f"{GRAPH_BASE_URL}/drives/{settings.ONEDRIVE_DRIVE_ID}/items/{item_id}/createLink"
+    resp = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        json={"type": "view", "scope": "anonymous"},
+        timeout=30,
+    )
+    if resp.status_code not in (200, 201):
+        raise OneDriveUploadError(
+            f"Graph API respondió {resp.status_code} al crear el link "
+            f"público del archivo: {resp.text[:500]}"
+        )
+    link_url = resp.json().get("link", {}).get("webUrl")
+    if not link_url:
+        raise OneDriveUploadError(
+            f"Graph API respondió OK pero sin 'link.webUrl' al crear el "
+            f"link público: {resp.json()}"
+        )
+    return link_url
+
+
 def subir_a_onedrive(archivo_django, nombre_destino: str) -> dict:
     """
     Sube un archivo (InMemoryUploadedFile o TemporaryUploadedFile de Django)
     a la carpeta de evidencias en OneDrive vía Microsoft Graph API, usando
-    autenticación client-credentials (MSAL).
+    autenticación client-credentials (MSAL), y le pide a Graph un link de
+    acceso público (view, anonymous) para poder mostrarlo sin login.
 
-    Devuelve {'webUrl': ..., 'item_id': ...}.
+    Devuelve {'webUrl': ..., 'item_id': ...} — 'webUrl' acá es el link
+    público de tipo "view"/anonymous, NO el webUrl privado crudo del item.
 
     Lanza:
       - OneDriveNoConfiguradoError si faltan credenciales en el entorno.
       - OneDriveAuthError si Graph API rechaza la autenticación.
-      - OneDriveUploadError si Graph API rechaza la subida.
+      - OneDriveUploadError si Graph API rechaza la subida o la creación
+        del link público.
     """
     token = _obtener_token()  # levanta OneDriveNoConfiguradoError / OneDriveAuthError
     ruta_destino = _nombre_destino_unico(nombre_destino)
@@ -205,11 +252,12 @@ def subir_a_onedrive(archivo_django, nombre_destino: str) -> dict:
     else:
         resultado = _subida_por_sesion(archivo_django, ruta_destino, token)
 
-    web_url = resultado.get("webUrl")
     item_id = resultado.get("id")
-    if not web_url or not item_id:
+    if not item_id:
         raise OneDriveUploadError(
-            f"Graph API respondió OK pero sin 'webUrl'/'id' en el body: {resultado}"
+            f"Graph API respondió OK pero sin 'id' en el body: {resultado}"
         )
 
-    return {"webUrl": web_url, "item_id": item_id}
+    link_publico = _crear_link_publico(item_id, token)
+
+    return {"webUrl": link_publico, "item_id": item_id}
